@@ -1,0 +1,38 @@
+# This file represents the drifted state that someone applied directly to the cluster,
+# bypassing Git. It is used in the demo script to simulate manual changes.
+#
+# Differences from examples/desired/deployment.yaml:
+#   - image changed from nginx:1.25 to nginx:1.19 (simulates an incident hotfix)
+#   - replicas changed from 2 to 5 (simulates a manual scale)
+#   - resource limits bumped (simulates a "quick fix" that never made it back to Git)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-app
+  namespace: default
+  annotations:
+    drift.gitops.io/ignore-fields: "spec.replicas"
+  labels:
+    app: demo-app
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: demo-app
+  template:
+    metadata:
+      labels:
+        app: demo-app
+    spec:
+      containers:
+        - name: demo-app
+          image: nginx:1.19
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
