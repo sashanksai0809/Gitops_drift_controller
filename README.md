@@ -64,6 +64,7 @@ python -m gitops_drift.main [options]
   --interval SECONDS     Loop interval in seconds (default: 60)
   --kubeconfig PATH      Path to kubeconfig; defaults to ~/.kube/config
   --ignore-fields PATHS  Comma-separated global field paths to ignore
+  --output FORMAT        Report output format: text | json (default: text)
   --log-level LEVEL      DEBUG | INFO | WARNING | ERROR (default: INFO)
 ```
 
