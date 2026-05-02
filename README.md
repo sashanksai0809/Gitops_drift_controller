@@ -2,26 +2,14 @@
 
 A small GitOps drift detector for comparing local Kubernetes manifests against live cluster state.
 
-## Why this is not ArgoCD or Flux
+## Submission Notes
 
-ArgoCD and Flux are fully-featured GitOps platforms: they handle multi-cluster syncs, RBAC, SSO, UI dashboards, Helm/Kustomize rendering, and rollback workflows. This tool does one thing -- it detects and reports drift. The scope is intentional. A narrower tool is easier to audit, easier to extend, and easier to run in a read-only advisory role alongside an existing platform that you do not control.
+If you are reviewing this as a take-home, I would start here:
 
-Use this when you want a lightweight second opinion on cluster state, a compliance audit trail, or a simple drift check in a CI pipeline. Do not use this as a replacement for a full GitOps platform in production.
-
-## Features
-
-- Reconciliation loop with configurable interval or single-shot mode
-- Structured drift report per resource: kind, name, namespace, field path, desired value, live value, action taken
-- Dry-run by default -- never touches the cluster unless `--remediate` is explicitly passed
-- Annotation-based field exclusions (`drift.gitops.io/ignore-fields`) for fields that are allowed to drift (e.g. replicas managed by HPA)
-- System field normalization strips `resourceVersion`, `uid`, `managedFields`, `status`, and other API-server-injected fields before diffing
-- Optional remediation mode that re-applies the desired manifest when drift is found
-- Missing resources are reported (and optionally created) in remediation mode
-- Safe error handling: a failed API call for one resource logs the error and continues to the next
-
-## Supported resource types
-
-Deployment, Service, ConfigMap, Namespace. See [Assumptions and descoped areas](#assumptions-and-descoped-areas) for context.
+- [DESIGN.md](DESIGN.md) explains the architecture, reconciliation loop, diff behavior, remediation choices, and the tradeoffs I made.
+- [RUNBOOK.md](RUNBOOK.md) walks through running it locally with kind, including expected output and remediation.
+- [scripts/e2e-kind.sh](scripts/e2e-kind.sh) is the end-to-end drift check. The quick start below also shows the manual version with `kubectl set image` and `kubectl patch`.
+- [Assumptions and descoped areas](#assumptions-and-descoped-areas) lists what I intentionally kept out of scope. The short version: this tracks `Deployment`, `Service`, `ConfigMap`, and `Namespace` resources in one cluster from plain YAML manifests. It does not try to be an alerting system, a history store, or a full GitOps platform.
 
 ## Quick start
 
@@ -50,6 +38,12 @@ python -m gitops_drift.main --manifests ./examples/desired --namespace default -
 ```
 
 See [RUNBOOK.md](RUNBOOK.md) for detailed step-by-step instructions including kind cluster setup and expected output.
+
+## Why this is not ArgoCD or Flux
+
+ArgoCD and Flux are the right tools when you need a full GitOps platform: sync orchestration, health checks, rollback workflows, Helm/Kustomize rendering, multi-cluster support, UI, RBAC, and integrations around the deployment lifecycle.
+
+This project is smaller on purpose. It loads a set of plain Kubernetes manifests, compares them with live cluster state, reports drift, and can optionally re-apply the desired manifest. I treated it as a focused drift detector rather than a replacement for the tools a team would normally use to run GitOps in production.
 
 ## CLI reference
 
