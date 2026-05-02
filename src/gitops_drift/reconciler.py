@@ -2,12 +2,14 @@
 
 import copy
 import logging
+import os
+import subprocess
 from typing import List, Dict
 
 from .config import ControllerConfig, IGNORE_ANNOTATION
 from .loader import load_manifests, resource_key
 from .kubernetes_client import fetch_live_resource
-from .normalizer import normalize
+from .normalizer import normalize, get_nested, set_nested
 from .diff_engine import compute_diff
 from .reporter import build_report_entry, print_report, print_summary
 from .remediator import remediate
@@ -20,7 +22,10 @@ def run_once(cfg: ControllerConfig) -> List[Dict]:
     Run a single reconciliation cycle.
     Returns the list of drift report entries (one per drifted resource).
     """
-    manifests = load_manifests(cfg.manifests_dir)
+    revision = _get_git_revision(cfg.manifests_dir)
+    logger.info("Reconciling against Git revision %s", revision)
+
+    manifests = load_manifests(cfg.manifests_dir, default_namespace=cfg.namespace)
     report_entries = []
 
     for manifest in manifests:
@@ -39,9 +44,12 @@ def run_once(cfg: ControllerConfig) -> List[Dict]:
 
         if live_raw is None:
             logger.warning("%s/%s not found in cluster (namespace=%s)", kind, name, effective_ns)
-            action = "would-create"
             if cfg.remediate:
                 action = remediate(_manifest_for_remediation(manifest, effective_ns), [])
+            elif cfg.dry_run:
+                action = "would-create (dry-run)"
+            else:
+                action = "would-create"
             report_entries.append(
                 build_report_entry(kind, name, effective_ns, [{"path": "<resource>", "desired": "exists", "live": "<missing>"}], action)
             )
@@ -63,7 +71,12 @@ def run_once(cfg: ControllerConfig) -> List[Dict]:
         if cfg.dry_run and not cfg.remediate:
             action = "drift-detected (dry-run)"
         elif cfg.remediate:
-            action = remediate(_manifest_for_remediation(manifest, effective_ns), diffs)
+            # Pass live_raw and ignore_fields so the remediation body preserves
+            # values of ignored fields rather than overwriting them.
+            action = remediate(
+                _manifest_for_remediation(manifest, effective_ns, live_raw, ignore_fields),
+                diffs,
+            )
         else:
             action = "drift-detected"
 
@@ -75,9 +88,29 @@ def run_once(cfg: ControllerConfig) -> List[Dict]:
             kind, name, len(diffs),
         )
 
-    print_report(report_entries, as_json=(cfg.output == "json"))
-    print_summary(report_entries, dry_run=cfg.dry_run)
+    print_report(report_entries, as_json=(cfg.output == "json"), revision=revision)
+    print_summary(report_entries, dry_run=cfg.dry_run, revision=revision)
     return report_entries
+
+
+def _get_git_revision(directory: str) -> str:
+    """Return the HEAD commit SHA of the git repo containing the manifests directory.
+
+    Logs which commit the controller is comparing against, making every
+    reconciliation cycle auditable. Returns 'unknown' if the directory is not
+    inside a git repository or if git is unavailable.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=os.path.abspath(directory),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
+    except Exception:
+        return "unknown"
 
 
 def _get_ignore_fields(manifest: Dict, global_ignores: List[str]) -> List[str]:
@@ -102,11 +135,41 @@ def _effective_namespace(kind: str, manifest_namespace: str, default_namespace: 
     return manifest_namespace or default_namespace
 
 
-def _manifest_for_remediation(manifest: Dict, effective_ns: str) -> Dict:
-    """Deep-copy manifest and inject effective namespace only when namespaced."""
+def _manifest_for_remediation(
+    manifest: Dict,
+    effective_ns: str,
+    live_raw: Dict = None,
+    ignore_fields: List[str] = None,
+) -> Dict:
+    """Build a safe remediation body from the desired manifest.
+
+    Three things happen here:
+    1. Deep-copy so we never mutate the manifest loaded from disk.
+    2. Inject the effective namespace (skipped for cluster-scoped resources).
+    3. For every ignored field, copy the CURRENT LIVE VALUE into the body.
+
+    Step 3 is the critical safety fix: a full replace without it would send
+    the manifest's declared value for ignored fields (e.g. spec.replicas: 2)
+    to the API server, silently overwriting what an HPA or operator set (e.g.
+    spec.replicas: 7). By injecting the live value, the replace becomes a
+    no-op for those fields.
+    """
     manifest_copy = copy.deepcopy(manifest)
-    # Do not mutate the original manifest loaded from disk.
-    # Namespace is cluster-scoped; do not inject metadata.namespace.
+
     if manifest_copy.get("kind") != "Namespace":
         manifest_copy.setdefault("metadata", {})["namespace"] = effective_ns
+
+    if ignore_fields and live_raw:
+        for field_path in ignore_fields:
+            parts = [p.strip() for p in field_path.split(".") if p.strip()]
+            if not parts:
+                continue
+            live_value = get_nested(live_raw, parts)
+            if live_value is not None:
+                set_nested(manifest_copy, parts, live_value)
+                logger.debug(
+                    "Preserved live value for ignored field '%s' in remediation body",
+                    field_path,
+                )
+
     return manifest_copy

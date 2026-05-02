@@ -1,7 +1,7 @@
 """Strip system-managed fields from Kubernetes objects before diffing."""
 
 import copy
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 def normalize(obj: Dict, extra_ignore: List[str] = None) -> Dict:
@@ -42,6 +42,24 @@ def normalize(obj: Dict, extra_ignore: List[str] = None) -> Dict:
         _delete_path(result, parts)
 
     return result
+
+
+def get_nested(obj: Any, path: List[str]) -> Optional[Any]:
+    """Return the value at a dot-split path, or None if any key is absent."""
+    for key in path:
+        if not isinstance(obj, dict) or key not in obj:
+            return None
+        obj = obj[key]
+    return obj
+
+
+def set_nested(obj: Dict, path: List[str], value: Any) -> None:
+    """Write value into obj at the nested path, creating intermediate dicts as needed."""
+    if not path:
+        return
+    for key in path[:-1]:
+        obj = obj.setdefault(key, {})
+    obj[path[-1]] = value
 
 
 def _delete_path(obj: Any, path: List[str]) -> None:

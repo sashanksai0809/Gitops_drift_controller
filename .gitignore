@@ -1,7 +1,18 @@
-.DS_Store
-.coverage
-.pytest_cache/
+# Python
 .venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
+
+# Test artefacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+
+# OS
+.DS_Store
+
+# Local study / personal tools (not part of submission)
+generate_explainer_pdf.py
+*.pdf

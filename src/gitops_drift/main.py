@@ -11,6 +11,14 @@ from .kubernetes_client import load_kube_config
 from .reconciler import run_once
 
 
+def _positive_int(value: str) -> int:
+    """argparse type that rejects zero and negative intervals."""
+    ivalue = int(value)
+    if ivalue <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {value}")
+    return ivalue
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="GitOps Drift Detection Controller -- compares local manifests against live cluster state.",
@@ -18,13 +26,16 @@ def parse_args():
         epilog="""
 Examples:
   # One-shot dry-run against ./examples/desired
-  python -m gitops_drift.main --manifests ./examples/desired --namespace default --dry-run --once
+  gitops-drift --manifests ./examples/desired --namespace default --dry-run --once
+
+  # CI pipeline: fail if drift exists
+  gitops-drift --manifests ./examples/desired --dry-run --once --fail-on-drift
 
   # Continuous loop every 60s in dry-run mode
-  python -m gitops_drift.main --manifests ./examples/desired --namespace default --dry-run --interval 60
+  gitops-drift --manifests ./examples/desired --namespace default --dry-run --interval 60
 
   # One-shot with remediation enabled
-  python -m gitops_drift.main --manifests ./examples/desired --namespace default --remediate --once
+  gitops-drift --manifests ./examples/desired --namespace default --remediate --once
         """,
     )
 
@@ -38,11 +49,22 @@ Examples:
     )
     parser.add_argument("--remediate", action="store_true", default=False, help="Re-apply desired state when drift is detected")
     parser.add_argument("--once", action="store_true", default=False, help="Run a single reconciliation cycle and exit")
-    parser.add_argument("--interval", type=int, default=60, help="Reconciliation interval in seconds (default: 60)")
+    parser.add_argument(
+        "--interval",
+        type=_positive_int,
+        default=60,
+        help="Reconciliation interval in seconds, must be > 0 (default: 60)",
+    )
     parser.add_argument("--kubeconfig", default=None, help="Path to kubeconfig file (defaults to ~/.kube/config)")
     parser.add_argument("--ignore-fields", default="", help="Comma-separated extra field paths to ignore globally")
     parser.add_argument("--output", choices=["text", "json"], default="text", help="Report output format (default: text)")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    parser.add_argument(
+        "--fail-on-drift",
+        action="store_true",
+        default=False,
+        help="Exit with status 1 if any drift is detected (useful in CI pipelines)",
+    )
 
     return parser.parse_args()
 
@@ -69,6 +91,7 @@ def main():
         kubeconfig=args.kubeconfig,
         output=args.output,
         extra_ignore_fields=[f.strip() for f in args.ignore_fields.split(",") if f.strip()],
+        fail_on_drift=args.fail_on_drift,
     )
 
     try:
@@ -81,7 +104,10 @@ def main():
         logging.warning("Remediation mode is ACTIVE -- drift will be corrected automatically")
 
     if cfg.once:
-        run_once(cfg)
+        entries = run_once(cfg)
+        if cfg.fail_on_drift and entries:
+            logging.warning("Drift detected and --fail-on-drift is set: exiting with status 1")
+            sys.exit(1)
         return
 
     stop_event = threading.Event()
@@ -90,16 +116,25 @@ def main():
         logging.info("Received signal %s, shutting down after current cycle", signum)
         stop_event.set()
 
+    # Handle both SIGTERM (container orchestrator) and SIGINT (Ctrl-C).
     signal.signal(signal.SIGTERM, _request_shutdown)
+    signal.signal(signal.SIGINT, _request_shutdown)
 
+    any_drift_seen = False
     logging.info("Starting reconciliation loop (interval=%ds)", cfg.interval)
     while not stop_event.is_set():
         try:
-            run_once(cfg)
+            entries = run_once(cfg)
+            if entries:
+                any_drift_seen = True
         except Exception as e:
             # Log and continue -- a transient API error should not kill the loop.
             logging.error("Reconciliation cycle failed: %s", e)
         stop_event.wait(cfg.interval)
+
+    if cfg.fail_on_drift and any_drift_seen:
+        logging.warning("Drift was detected during this run and --fail-on-drift is set: exiting with status 1")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

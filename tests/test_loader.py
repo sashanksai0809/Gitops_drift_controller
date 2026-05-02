@@ -72,3 +72,64 @@ def test_malformed_yaml_logs_warning_and_skips_file(tmp_path, caplog):
 
     assert loaded == []
     assert "YAML parse error" in caplog.text
+
+
+def test_duplicate_resource_is_skipped_with_warning(tmp_path, caplog):
+    """The second definition of the same kind/namespace/name must be dropped."""
+    manifest = {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {"name": "config", "namespace": "default"},
+        "data": {"key": "first"},
+    }
+    duplicate = {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {"name": "config", "namespace": "default"},
+        "data": {"key": "second"},
+    }
+    (tmp_path / "a.yaml").write_text(yaml.safe_dump(manifest))
+    (tmp_path / "b.yaml").write_text(yaml.safe_dump(duplicate))
+
+    with caplog.at_level(logging.WARNING):
+        loaded = load_manifests(str(tmp_path))
+
+    assert len(loaded) == 1
+    assert loaded[0]["data"]["key"] == "first"
+    assert "Duplicate" in caplog.text
+
+
+def test_same_name_different_namespace_not_duplicate(tmp_path):
+    """Resources with the same name but different namespaces are distinct."""
+    m1 = {"apiVersion": "v1", "kind": "ConfigMap",
+          "metadata": {"name": "config", "namespace": "team-a"}, "data": {}}
+    m2 = {"apiVersion": "v1", "kind": "ConfigMap",
+          "metadata": {"name": "config", "namespace": "team-b"}, "data": {}}
+    (tmp_path / "a.yaml").write_text(yaml.safe_dump(m1))
+    (tmp_path / "b.yaml").write_text(yaml.safe_dump(m2))
+
+    loaded = load_manifests(str(tmp_path))
+    assert len(loaded) == 2
+
+
+def test_default_namespace_and_explicit_default_are_duplicates(tmp_path, caplog):
+    implicit = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": "web"},
+        "spec": {},
+    }
+    explicit = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": "web", "namespace": "default"},
+        "spec": {},
+    }
+    (tmp_path / "a.yaml").write_text(yaml.safe_dump(implicit))
+    (tmp_path / "b.yaml").write_text(yaml.safe_dump(explicit))
+
+    with caplog.at_level(logging.WARNING):
+        loaded = load_manifests(str(tmp_path), default_namespace="default")
+
+    assert loaded == [implicit]
+    assert "Duplicate resource Deployment/web (namespace=default)" in caplog.text

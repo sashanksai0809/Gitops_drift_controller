@@ -12,11 +12,11 @@ def remediate(manifest: Dict, diffs: List[Dict]) -> str:
     """
     Re-apply the desired manifest to the cluster.
 
-    This is intentionally a full replace rather than a strategic merge patch.
-    A replace is simpler to reason about and guarantees the cluster state
-    converges to exactly what is in Git. The tradeoff is that it will overwrite
-    any fields that are legitimately managed outside of Git (e.g. by an operator),
-    which is why remediation is opt-in and why the exclusion mechanism exists.
+    This take-home uses a full replace because it is simple to reason about and
+    attempts to converge the resource to Git. Ignored-field preservation happens
+    before this function is called, so fields such as HPA-managed replicas keep
+    their live values in the replace body. Server-side apply with a dedicated
+    field manager is the recommended production path.
     """
     kind = manifest.get("kind", "")
     name = manifest.get("metadata", {}).get("name", "")

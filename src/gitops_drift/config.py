@@ -37,3 +37,4 @@ class ControllerConfig:
     kubeconfig: Optional[str] = None
     output: str = "text"
     extra_ignore_fields: List[str] = field(default_factory=list)
+    fail_on_drift: bool = False

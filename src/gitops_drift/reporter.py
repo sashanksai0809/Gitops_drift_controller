@@ -39,17 +39,27 @@ def build_report_entry(
     }
 
 
-def print_report(entries: List[Dict], as_json: bool = False) -> None:
+def print_report(entries: List[Dict], as_json: bool = False, revision: str = None) -> None:
     """Print the full drift report to stdout."""
     if as_json:
-        print(json.dumps(entries, indent=2, default=str))
+        # Structured envelope so consumers can correlate results with the exact
+        # Git commit that was the source of truth for this run.
+        report = {
+            "revision": revision or "unknown",
+            "resources": entries,
+        }
+        print(json.dumps(report, indent=2, default=str))
         return
 
+    rev_label = f"  Git revision : {_BOLD}{(revision or 'unknown')[:12]}{_RESET}"
+
     if not entries:
-        print(f"\n{_GREEN}{_BOLD}No drift detected.{_RESET}\n")
+        print(f"\n{_GREEN}{_BOLD}No drift detected.{_RESET}")
+        print(rev_label + "\n")
         return
 
     print(f"\n{_BOLD}Drift Report{_RESET}")
+    print(rev_label)
     print("=" * 60)
 
     for entry in entries:
@@ -71,11 +81,12 @@ def print_report(entries: List[Dict], as_json: bool = False) -> None:
     print(f"Total: {len(entries)} resource(s) drifted, {total} field(s) changed\n")
 
 
-def print_summary(entries: List[Dict], dry_run: bool) -> None:
+def print_summary(entries: List[Dict], dry_run: bool, revision: str = None) -> None:
     mode = "dry-run" if dry_run else "remediation"
     logger.info(
-        "Reconciliation complete [mode=%s]: %d drifted resource(s)",
+        "Reconciliation complete [mode=%s, revision=%s]: %d drifted resource(s)",
         mode,
+        (revision or "unknown")[:12],
         len(entries),
     )
 

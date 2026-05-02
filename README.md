@@ -1,6 +1,6 @@
 # GitOps Drift Detection Controller
 
-A focused, production-quality tool that compares Kubernetes manifests stored in Git against live cluster state and reports -- or optionally corrects -- any divergence.
+A small GitOps drift detector for comparing local Kubernetes manifests against live cluster state.
 
 ## Why this is not ArgoCD or Flux
 
@@ -66,21 +66,23 @@ python -m gitops_drift.main [options]
   --ignore-fields PATHS  Comma-separated global field paths to ignore
   --output FORMAT        Report output format: text | json (default: text)
   --log-level LEVEL      DEBUG | INFO | WARNING | ERROR (default: INFO)
+  --fail-on-drift        Exit with status 1 if drift is detected (for CI pipelines)
 ```
 
 ## Example drift report
 
 ```
 Drift Report
+  Git revision : 3b0406bf9c1a
 ============================================================
 
 Deployment/demo-app (ns: default)
   Action : drift-detected (dry-run)
   Fields : 2 drifted
-    spec.template.spec.containers[0].image
+    spec.template.spec.containers[name=demo-app].image
       desired : nginx:1.25
       live    : nginx:1.19
-    spec.template.spec.containers[0].resources.limits.cpu
+    spec.template.spec.containers[name=demo-app].resources.limits.cpu
       desired : 250m
       live    : 500m
 
@@ -88,9 +90,11 @@ Deployment/demo-app (ns: default)
 Total: 1 resource(s) drifted, 2 field(s) changed
 ```
 
+Container paths use `[name=<container-name>]` notation — containers are matched semantically by name, not by position, so sidecar injections and container reordering do not produce false positives.
+
 ## Exclusion mechanism
 
-Add the annotation `drift.gitops.io/ignore-fields` to any manifest with a comma-separated list of dot-notation field paths. Those fields will be stripped from both the desired and live objects before diffing, so they will never appear in the report and will never be remediated.
+Add the annotation `drift.gitops.io/ignore-fields` to any manifest with a comma-separated list of dot-notation field paths. Ignored fields are excluded from drift detection. During remediation, the controller preserves the current live value for ignored fields in the replace body, so externally managed fields such as HPA-controlled `spec.replicas` are not reset.
 
 ```yaml
 metadata:
@@ -139,11 +143,30 @@ subjects:
 
 The Python client automatically detects in-cluster config when `KUBERNETES_SERVICE_HOST` is set. Remove the `--kubeconfig` flag and the code falls through to `load_incluster_config()`.
 
+## CI pipeline usage
+
+Use `--once --fail-on-drift` together to get a non-zero exit code when drift exists, making the controller useful as a gate in GitHub Actions or other CI systems:
+
+```bash
+gitops-drift --manifests ./manifests --dry-run --once --fail-on-drift --output json
+```
+
+Exit code 0 means clean. Exit code 1 means drift was found. The JSON output can be parsed with `jq` for structured reporting.
+
+## E2E test against a local cluster
+
+```bash
+./scripts/e2e-kind.sh               # drift detection only
+REMEDIATE=true ./scripts/e2e-kind.sh  # also test remediation
+```
+
+See [scripts/e2e-kind.sh](scripts/e2e-kind.sh) for full details. Requires `kind`, `kubectl`, and `jq`.
+
 ## Assumptions and descoped areas
 
-**Resource scope**: Only Deployment, Service, ConfigMap, and Namespace are supported. StatefulSet, DaemonSet, CronJob, Ingress, and CRDs are not. Each additional resource type is straightforward to add in `kubernetes_client.py`, but each can carry subtle edge cases (e.g. StatefulSet update strategies, CRD validation). Keeping the scope narrow makes the tool easier to trust and explain.
+**Resource scope**: Only Deployment, Service, ConfigMap, and Namespace are supported. StatefulSet, DaemonSet, CronJob, Ingress, and CRDs are not. Adding resource types is mechanically simple in `kubernetes_client.py`, but each kind has its own update and defaulting edge cases (e.g. StatefulSet update strategies, CRD validation). Keeping the scope narrow makes the tool easier to trust and explain.
 
-**List diffing**: Container lists and port lists are compared element-by-element by position. Semantic matching (e.g. matching containers by `name`) is not implemented. In practice this is fine for the example resources, but it would produce noisy output if container ordering changes between desired and live state.
+**List diffing**: Lists of objects with `name` keys are matched by name, which avoids false positives from container reordering or sidecar injection. Lists without stable names fall back to positional comparison.
 
 **No multi-cluster support**: The tool reads a single kubeconfig context. Running across multiple clusters requires running separate instances.
 
@@ -155,7 +178,7 @@ The Python client automatically detects in-cluster config when `KUBERNETES_SERVI
 
 1. **Why custom diff instead of deepdiff?** A recursive diff of ~50 lines is easy to walk through in an interview and has no external dependencies. deepdiff is powerful but adds explanation overhead.
 
-2. **Why full replace instead of strategic merge patch for remediation?** A replace is simpler to reason about and guarantees convergence. The cost is that it can overwrite fields managed by operators -- which is why the exclusion mechanism exists and why remediation is opt-in.
+2. **Why full replace instead of strategic merge patch for remediation?** A replace is simple to reason about for a take-home implementation and attempts to converge the resource to Git. The cost is that it can overwrite fields managed by operators, so ignored fields are preserved before remediation and server-side apply is the recommended production path.
 
 3. **What breaks at scale?** Listing resources one at a time is fine for a handful of manifests. A production controller would use informers and a work queue. The current polling loop is appropriate for the scope.
 

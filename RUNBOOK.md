@@ -7,6 +7,7 @@ This document covers everything needed to run the controller locally, simulate d
 - Python 3.9+
 - [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation) (Kubernetes in Docker)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
+- [jq](https://jqlang.github.io/jq/) (used by the kind E2E script)
 - Docker
 
 ---
@@ -137,24 +138,27 @@ Expected output:
 
 ```
 Drift Report
+  Git revision : <12-char SHA>
 ============================================================
 
 Deployment/demo-app (ns: default)
   Action : drift-detected (dry-run)
   Fields : 3 drifted
-    spec.template.spec.containers[0].image
+    spec.template.spec.containers[name=demo-app].image
       desired : nginx:1.25
       live    : nginx:1.19
-    spec.template.spec.containers[0].resources.limits.cpu
+    spec.template.spec.containers[name=demo-app].resources.limits.cpu
       desired : 250m
       live    : 500m
-    spec.template.spec.containers[0].resources.limits.memory
+    spec.template.spec.containers[name=demo-app].resources.limits.memory
       desired : 256Mi
       live    : 512Mi
 
 ============================================================
 Total: 1 resource(s) drifted, 3 field(s) changed
 ```
+
+Container paths now use `[name=<container-name>]` notation instead of positional `[0]`. This is semantically correct: containers are matched by name, so the path reflects the container you actually care about rather than its position in the list.
 
 Note that `spec.replicas` does NOT appear in the report even though it may differ. The deployment manifest includes `drift.gitops.io/ignore-fields: "spec.replicas"`, which tells the controller to skip that field. This simulates an HPA managing replica counts.
 
@@ -235,7 +239,7 @@ Expected output:
 
 ```
 All tests should pass. Run pytest -v to see the latest test list.
-46 passed in 0.XXs
+75 passed in 0.XXs
 ```
 
 Run with coverage:
