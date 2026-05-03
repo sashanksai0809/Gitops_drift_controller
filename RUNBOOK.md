@@ -1,14 +1,24 @@
-# Runbook: GitOps Drift Detection Controller
+# GitOps Drift Detection Controller: Runbook
 
-This document covers everything needed to run the controller locally, simulate drift, and exercise both dry-run and remediation modes.
+Quick reference for running the controller locally, injecting drift, and testing both dry-run and remediation.
 
 ## Prerequisites
 
 - Python 3.9+
-- [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation) (Kubernetes in Docker)
+- [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
-- [jq](https://jqlang.github.io/jq/) (used by the kind E2E script)
-- Docker
+- [jq](https://jqlang.github.io/jq/)
+- [Docker Desktop for Mac](https://docs.docker.com/desktop/install/mac-install/) (needs to be running before anything else)
+
+```bash
+brew install python@3.11 kind kubectl jq
+```
+
+Docker Desktop has to be installed separately. Start it before moving on and do a quick sanity check:
+
+```bash
+docker info
+```
 
 ---
 
@@ -18,9 +28,9 @@ This document covers everything needed to run the controller locally, simulate d
 ./scripts/setup-kind.sh
 ```
 
-This creates a cluster named `drift-demo` and verifies it is reachable. If you already have a cluster you want to use, skip this step and make sure `kubectl config current-context` points to it.
+Spins up a cluster called `drift-demo` and checks it's reachable. If you already have a cluster you want to use, skip this and make sure `kubectl config current-context` is pointing at the right one.
 
-Manual equivalent:
+If you'd rather do it by hand:
 
 ```bash
 kind create cluster --name drift-demo
@@ -32,34 +42,31 @@ kubectl cluster-info --context kind-drift-demo
 ## 2. Install dependencies
 
 ```bash
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-This installs the `kubernetes` Python client, `PyYAML`, `pytest`, and `pytest-cov`. It also installs the `gitops-drift` CLI entry point.
+Keeps everything out of your system Python. In a new terminal, just `source .venv/bin/activate` from the repo root and you're back in.
 
-To verify:
+Sanity check:
 
 ```bash
-python -m gitops_drift.main --help
+python3 -m gitops_drift.main --help
 ```
 
 ---
 
 ## 3. Apply the desired manifests
 
-Apply the example manifests to the cluster so there is a baseline to compare against:
-
 ```bash
 kubectl apply -f examples/desired/
 ```
 
-Verify the resources are running:
+Check the namespaced resources:
 
 ```bash
-kubectl get deployments,services -n default
+kubectl get deployments,services,configmaps -n default
 ```
-
-Expected output:
 
 ```
 NAME                       READY   UP-TO-DATE   AVAILABLE   AGE
@@ -67,39 +74,52 @@ deployment.apps/demo-app   2/2     2            2           30s
 
 NAME               TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE
 service/demo-app   ClusterIP   10.96.xxx.xxx   <none>        80/TCP    30s
+
+NAME                      DATA   AGE
+configmap/demo-app-config 3      30s
+```
+
+Check the cluster-scoped Namespace separately (Namespaces don't belong to a namespace, so `-n default` doesn't apply):
+
+```bash
+kubectl get namespace demo
+```
+
+```
+NAME   STATUS   AGE
+demo   Active   30s
 ```
 
 ---
 
-## 4. Run dry-run detection (no drift yet)
+## 4. Dry-run with no drift
 
 ```bash
-python -m gitops_drift.main \
+python3 -m gitops_drift.main \
   --manifests ./examples/desired \
   --namespace default \
   --dry-run \
   --once
 ```
 
-Expected output:
-
 ```
 No drift detected.
+  Git revision : <12-char SHA>
 ```
 
 ---
 
-## 5. Simulate drift
+## 5. Inject drift
 
-These commands change the cluster state without touching the Git manifests, simulating what happens when someone makes a manual "hotfix" directly against the cluster.
+Make changes directly in the cluster, simulating what happens after an incident hotfix or a manual `kubectl edit` that never gets pushed back to Git.
 
-**Change the container image** (simulates an incident rollback that never made it back to Git):
+**Deployment: change the image**
 
 ```bash
 kubectl set image deployment/demo-app demo-app=nginx:1.19
 ```
 
-**Bump resource limits** (simulates a "quick fix" for a memory pressure event):
+**Deployment: bump resource limits**
 
 ```bash
 kubectl patch deployment demo-app --patch '
@@ -115,34 +135,123 @@ spec:
 '
 ```
 
-**Verify the cluster is now in a different state than Git:**
+**ConfigMap: change a config value (optional, shows multi-resource detection)**
+
+```bash
+kubectl patch configmap demo-app-config --patch '{"data":{"LOG_LEVEL":"debug","MAX_CONNECTIONS":"200"}}'
+```
+
+**Service: change a metadata label (optional, shows Service drift without breaking routing)**
+
+```bash
+kubectl patch service demo-app --patch '{"metadata":{"labels":{"app":"demo-app-drift"}}}'
+```
+
+**Namespace: change a label (optional, shows cluster-scoped resource detection)**
+
+```bash
+kubectl patch namespace demo --patch '{"metadata":{"labels":{"env":"staging"}}}'
+```
+
+Confirm the Deployment diverged from Git:
 
 ```bash
 kubectl get deployment demo-app -o jsonpath='{.spec.template.spec.containers[0].image}'
-# should print nginx:1.19
+# nginx:1.19
 ```
 
 ---
 
-## 6. Run dry-run detection (with drift)
+## 6. Dry-run with drift
 
 ```bash
-python -m gitops_drift.main \
+python3 -m gitops_drift.main \
   --manifests ./examples/desired \
   --namespace default \
   --dry-run \
   --once
 ```
 
-Expected output:
+If you ran the ConfigMap, Service, and Namespace patches in step 5, you'll see all four resources in the report:
 
 ```
 Drift Report
   Git revision : <12-char SHA>
 ============================================================
 
+ConfigMap/demo-app-config (ns: default)
+  Action : drift-detected (dry-run)
+  Fields : 2 drifted
+    data.LOG_LEVEL
+      desired : info
+      live    : debug
+    data.MAX_CONNECTIONS
+      desired : 100
+      live    : 200
+
 Deployment/demo-app (ns: default)
   Action : drift-detected (dry-run)
+  Fields : 3 drifted
+    spec.template.spec.containers[name=demo-app].image
+      desired : nginx:1.25
+      live    : nginx:1.19
+    spec.template.spec.containers[name=demo-app].resources.limits.cpu
+      desired : 250m
+      live    : 500m
+    spec.template.spec.containers[name=demo-app].resources.limits.memory
+      desired : 256Mi
+      live    : 512Mi
+
+Namespace/demo (ns: )
+  Action : drift-detected (dry-run)
+  Fields : 1 drifted
+    metadata.labels.env
+      desired : dev
+      live    : staging
+
+Service/demo-app (ns: default)
+  Action : drift-detected (dry-run)
+  Fields : 1 drifted
+    metadata.labels.app
+      desired : demo-app
+      live    : demo-app-drift
+
+============================================================
+Total: 4 resource(s) drifted, 7 field(s) changed
+```
+
+The Namespace entry shows `ns: ` (empty) because Namespaces are cluster-scoped; they don't belong to a namespace.
+
+If you only ran the Deployment patches, the ConfigMap, Service, and Namespace blocks won't appear and the total will show 1 resource drifted, 3 field(s) changed.
+
+Paths use `[name=<container-name>]` instead of positional `[0]`. Containers are matched by name so the path stays accurate regardless of order in the list.
+
+`spec.replicas` won't show up even if it differs. The manifest has `drift.gitops.io/ignore-fields: "spec.replicas"` so an HPA can manage counts without constantly triggering drift alerts.
+
+---
+
+## 7. Remediation
+
+```bash
+python3 -m gitops_drift.main \
+  --manifests ./examples/desired \
+  --namespace default \
+  --remediate \
+  --once
+```
+
+```
+WARNING  root  Remediation mode is ACTIVE -- drift will be corrected automatically
+INFO     gitops_drift.reconciler  Reconciling against Git revision <sha>
+INFO     gitops_drift.remediator  Remediating Deployment/demo-app in namespace 'default' (3 field(s) drifted)
+INFO     gitops_drift.kubernetes_client  Updated Deployment/demo-app in namespace 'default'
+
+Drift Report
+  Git revision : <12-char SHA>
+============================================================
+
+Deployment/demo-app (ns: default)
+  Action : remediated
   Fields : 3 drifted
     spec.template.spec.containers[name=demo-app].image
       desired : nginx:1.25
@@ -158,43 +267,17 @@ Deployment/demo-app (ns: default)
 Total: 1 resource(s) drifted, 3 field(s) changed
 ```
 
-Container paths now use `[name=<container-name>]` notation instead of positional `[0]`. This is semantically correct: containers are matched by name, so the path reflects the container you actually care about rather than its position in the list.
-
-Note that `spec.replicas` does NOT appear in the report even though it may differ. The deployment manifest includes `drift.gitops.io/ignore-fields: "spec.replicas"`, which tells the controller to skip that field. This simulates an HPA managing replica counts.
-
----
-
-## 7. Run remediation mode
-
-Remediation re-applies the desired manifest to the cluster, restoring it to the Git state.
-
-```bash
-python -m gitops_drift.main \
-  --manifests ./examples/desired \
-  --namespace default \
-  --remediate \
-  --once
-```
-
-Expected log output includes:
-
-```
-WARNING  root  Remediation mode is ACTIVE -- drift will be corrected automatically
-INFO     gitops_drift.remediator  Remediating Deployment/demo-app in namespace 'default' (3 field(s) drifted)
-INFO     gitops_drift.kubernetes_client  Updated Deployment/demo-app in namespace 'default'
-```
-
-Verify the cluster is back in sync:
+Check it came back:
 
 ```bash
 kubectl get deployment demo-app -o jsonpath='{.spec.template.spec.containers[0].image}'
-# should print nginx:1.25
+# nginx:1.25
 ```
 
-Run dry-run again to confirm no remaining drift:
+Re-run dry-run to confirm nothing is still drifted:
 
 ```bash
-python -m gitops_drift.main \
+python3 -m gitops_drift.main \
   --manifests ./examples/desired \
   --namespace default \
   --dry-run \
@@ -203,46 +286,51 @@ python -m gitops_drift.main \
 
 ---
 
-## 8. Run the continuous loop
+## 8. Continuous loop
 
-Omit `--once` to run in loop mode. The controller reconciles every `--interval` seconds:
+Drop `--once` and the controller keeps reconciling every `--interval` seconds:
 
 ```bash
-python -m gitops_drift.main \
+python3 -m gitops_drift.main \
   --manifests ./examples/desired \
   --namespace default \
   --dry-run \
   --interval 30
 ```
 
-Press `Ctrl+C` to stop.
+`Ctrl+C` to stop.
 
 ---
 
-## 9. Use the demo script
+## 9. Demo script
 
-The demo script automates steps 5 and 6 -- it applies drift and runs detection:
+Shortcut for steps 5 and 6: injects drift and runs detection in one shot:
 
 ```bash
 ./scripts/demo-drift.sh
 ```
 
+To see the controller catch drift live mid-run, use loop mode. It starts the controller in the background, injects drift while it's running, and prints the full output after the next reconciliation cycle:
+
+```bash
+LOOP=1 ./scripts/demo-drift.sh
+```
+
+The interval defaults to 15 seconds. Override it with `INTERVAL=<seconds>`:
+
+```bash
+LOOP=1 INTERVAL=30 ./scripts/demo-drift.sh
+```
+
 ---
 
-## 10. Run the tests
+## 10. Tests
 
 ```bash
 pytest -v
 ```
 
-Expected output:
-
-```
-All tests should pass. Run pytest -v to see the latest test list.
-75 passed in 0.XXs
-```
-
-Run with coverage:
+All tests should pass with no failures. With coverage:
 
 ```bash
 pytest --cov=src/gitops_drift --cov-report=term-missing
@@ -256,20 +344,31 @@ pytest --cov=src/gitops_drift --cov-report=term-missing
 ./scripts/cleanup.sh
 ```
 
-This deletes the kind cluster and removes the Docker network.
+Deletes the kind cluster and cleans up the Docker network.
 
 ---
 
 ## Troubleshooting
 
 **`ModuleNotFoundError: No module named 'kubernetes'`**
-Run `pip install -e ".[dev]"` from the repo root.
+Venv isn't active. `source .venv/bin/activate`, then `pip install -e ".[dev]"` from the repo root.
+
+**`command not found: python`**
+macOS doesn't ship a bare `python` binary. Activate the venv or just call `python3` directly.
 
 **`Could not load Kubernetes config`**
-Make sure your kind cluster is running: `kubectl cluster-info`. If you have multiple contexts, check with `kubectl config current-context`.
+Run `kubectl cluster-info`. If the cluster is gone, re-run `setup-kind.sh`. If you have multiple contexts, check `kubectl config current-context`.
 
-**Drift report shows many unexpected fields**
-The controller only flags fields present in the desired manifest. If you see unexpected fields, check that your manifest is minimal -- avoid copying fields from `kubectl get -o yaml` output without stripping system fields first.
+**`Cannot connect to the Docker daemon`**
+Docker Desktop isn't running. `open -a Docker` and give it a moment to start.
+
+**`kind: command not found` after `brew install kind`**
+Homebrew isn't on PATH. Source the right shellenv for your machine and retry:
+- Apple Silicon: `eval "$(/opt/homebrew/bin/brew shellenv)"`
+- Intel: `eval "$(/usr/local/bin/brew shellenv)"`
+
+**Lots of unexpected fields in the drift report**
+Manifest is too noisy. Don't paste directly from `kubectl get -o yaml` without stripping server-side fields first.
 
 **`ApiException: (409) Conflict` during remediation**
-This can happen if the resource was modified between fetch and replace. The error is logged and the loop continues. Re-running will pick up the fresh state.
+Race between the fetch and replace. The error is logged and skipped; the next loop iteration picks up the fresh state.

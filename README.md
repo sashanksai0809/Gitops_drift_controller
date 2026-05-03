@@ -1,20 +1,44 @@
 # GitOps Drift Detection Controller
 
-A small GitOps drift detector for comparing local Kubernetes manifests against live cluster state.
+A simple tool that checks whether your Kubernetes cluster (observed state) matches what’s in Git (desired state), and shows what changed when they go out of sync.
 
-## Submission Notes
+## Scope
 
-If you are reviewing this as a take-home, I would start here:
+The tool reads Kubernetes manifests, compares them with the current cluster state, and reports any drift. It also includes an optional remediation mode to re-apply the desired state.
 
-- [DESIGN.md](DESIGN.md) explains the architecture, reconciliation loop, diff behavior, remediation choices, and the tradeoffs I made.
-- [RUNBOOK.md](RUNBOOK.md) walks through running it locally with kind, including expected output and remediation.
-- [scripts/e2e-kind.sh](scripts/e2e-kind.sh) is the end-to-end drift check. The quick start below also shows the manual version with `kubectl set image` and `kubectl patch`.
-- [Assumptions and descoped areas](#assumptions-and-descoped-areas) lists what I intentionally kept out of scope. The short version: this tracks `Deployment`, `Service`, `ConfigMap`, and `Namespace` resources in one cluster from plain YAML manifests. It does not try to be an alerting system, a history store, or a full GitOps platform.
+This project is not intended to replace tools like ArgoCD or Flux. Those systems handle full GitOps workflows: sync orchestration, rollbacks, multi-cluster management, and integration with tools like Helm or Kustomize.
+
+Keeping the scope small makes the behavior easier to reason about and allows it to be used alongside an existing GitOps setup rather than as a full platform.
+
+## Design
+
+The overall architecture, reconciliation loop, diff behavior, and remediation approach are documented in [DESIGN.md](DESIGN.md).
+
+The focus is on keeping the reconciliation logic simple and easy to reason about while handling common Kubernetes edge cases like defaulted fields and list ordering.
+
+## Runbook
+
+[RUNBOOK.md](RUNBOOK.md) provides a step-by-step walkthrough to run the project locally using kind, including expected output and remediation flow.
+
+## Demo
+
+An end-to-end drift detection flow is available via:
+
+- [`scripts/e2e-kind.sh`](scripts/e2e-kind.sh) for automated testing
+- Manual drift simulation using `kubectl set image` and `kubectl patch` (see Quick Start below)
+
+## Assumptions
+
+This project intentionally focuses on a small subset of resources (`Deployment`, `Service`, `ConfigMap`, `Namespace`) and operates on a single cluster using plain YAML manifests.
+
+It does not aim to be a full GitOps platform, alerting system, or history store. See [Assumptions and descoped areas](#assumptions-and-descoped-areas) for details.
+
 
 ## Quick start
 
 ```bash
-# 1. Install dependencies
+# 1. Install dependencies (create a venv first to avoid touching system Python)
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 # 2. Start a local cluster (requires kind)
@@ -24,35 +48,30 @@ pip install -e ".[dev]"
 kubectl apply -f examples/desired/
 
 # 4. Run dry-run detection (nothing drifted yet)
-python -m gitops_drift.main --manifests ./examples/desired --namespace default --dry-run --once
+python3 -m gitops_drift.main --manifests ./examples/desired --namespace default --dry-run --once
 
 # 5. Simulate drift
 kubectl set image deployment/demo-app demo-app=nginx:1.19
 kubectl patch deployment demo-app -p '{"spec":{"template":{"spec":{"containers":[{"name":"demo-app","resources":{"limits":{"cpu":"500m","memory":"512Mi"}}}]}}}}'
 
 # 6. Detect drift
-python -m gitops_drift.main --manifests ./examples/desired --namespace default --dry-run --once
+python3 -m gitops_drift.main --manifests ./examples/desired --namespace default --dry-run --once
 
 # 7. Remediate
-python -m gitops_drift.main --manifests ./examples/desired --namespace default --remediate --once
+python3 -m gitops_drift.main --manifests ./examples/desired --namespace default --remediate --once
 ```
 
-See [RUNBOOK.md](RUNBOOK.md) for detailed step-by-step instructions including kind cluster setup and expected output.
-
-## Why this is not ArgoCD or Flux
-
-ArgoCD and Flux are the right tools when you need a full GitOps platform: sync orchestration, health checks, rollback workflows, Helm/Kustomize rendering, multi-cluster support, UI, RBAC, and integrations around the deployment lifecycle.
-
-This project is smaller on purpose. It loads a set of plain Kubernetes manifests, compares them with live cluster state, reports drift, and can optionally re-apply the desired manifest. I treated it as a focused drift detector rather than a replacement for the tools a team would normally use to run GitOps in production.
+See [RUNBOOK.md](RUNBOOK.md) for a more detailed walkthrough, including cluster setup and expected output.
 
 ## CLI reference
 
 ```
-python -m gitops_drift.main [options]
+python3 -m gitops_drift.main [options]
 
   --manifests PATH       Directory of desired-state YAML manifests (required)
   --namespace NAME       Default namespace when manifest omits one (default: default)
   --dry-run              Report drift without modifying the cluster (default: on)
+  --no-dry-run           Disable dry-run; report drift without applying changes
   --remediate            Re-apply desired state when drift is found (disables dry-run)
   --once                 Run one reconciliation cycle and exit
   --interval SECONDS     Loop interval in seconds (default: 60)
@@ -65,10 +84,19 @@ python -m gitops_drift.main [options]
 
 ## Example drift report
 
+The controller reconciles all resources in the manifest directory in one cycle:
+
 ```
 Drift Report
   Git revision : 3b0406bf9c1a
 ============================================================
+
+ConfigMap/demo-app-config (ns: default)
+  Action : drift-detected (dry-run)
+  Fields : 1 drifted
+    data.LOG_LEVEL
+      desired : info
+      live    : debug
 
 Deployment/demo-app (ns: default)
   Action : drift-detected (dry-run)
@@ -80,15 +108,33 @@ Deployment/demo-app (ns: default)
       desired : 250m
       live    : 500m
 
+Namespace/demo (ns: )
+  Action : drift-detected (dry-run)
+  Fields : 1 drifted
+    metadata.labels.env
+      desired : dev
+      live    : staging
+
+Service/demo-app (ns: default)
+  Action : drift-detected (dry-run)
+  Fields : 1 drifted
+    metadata.labels.app
+      desired : demo-app
+      live    : demo-app-drift
+
 ============================================================
-Total: 1 resource(s) drifted, 2 field(s) changed
+Total: 4 resource(s) drifted, 5 field(s) changed
 ```
 
-Container paths use `[name=<container-name>]` notation — containers are matched semantically by name, not by position, so sidecar injections and container reordering do not produce false positives.
+<img src="Screenshots/Drift_DryRun.png" width="600" alt="Drift detection output">
+
+Container paths use `[name=<container-name>]` notation. Containers are matched by name rather than position, so sidecar injection or reordering does not produce false positives.
 
 ## Exclusion mechanism
 
-Add the annotation `drift.gitops.io/ignore-fields` to any manifest with a comma-separated list of dot-notation field paths. Ignored fields are excluded from drift detection. During remediation, the controller preserves the current live value for ignored fields in the replace body, so externally managed fields such as HPA-controlled `spec.replicas` are not reset.
+Add the annotation `drift.gitops.io/ignore-fields` to any manifest with a comma-separated list of dot-notation field paths.
+
+Ignored fields are excluded from drift detection. During remediation, the controller preserves the current live value for those fields in the replace body, so externally managed fields such as HPA-controlled `spec.replicas` are not reset.
 
 ```yaml
 metadata:
@@ -116,10 +162,10 @@ metadata:
 rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs: ["get", "list", "create", "update"]
+    verbs: ["get", "list", "create", "update"]  # list included for future inverse-drift detection
   - apiGroups: [""]
     resources: ["services", "configmaps", "namespaces"]
-    verbs: ["get", "list", "create", "update"]
+    verbs: ["get", "list", "create", "update"]  # list included for future inverse-drift detection
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -135,21 +181,24 @@ subjects:
     namespace: drift-system
 ```
 
-The Python client automatically detects in-cluster config when `KUBERNETES_SERVICE_HOST` is set. Remove the `--kubeconfig` flag and the code falls through to `load_incluster_config()`.
+The Python client detects in-cluster configuration automatically when `KUBERNETES_SERVICE_HOST` is set. Remove the `--kubeconfig` flag and the code falls through to `load_incluster_config()`.
 
 ## CI pipeline usage
 
-Use `--once --fail-on-drift` together to get a non-zero exit code when drift exists, making the controller useful as a gate in GitHub Actions or other CI systems:
+Use `--once --fail-on-drift` together to return a non-zero exit code when drift is detected, which makes this useful as a CI gate:
 
 ```bash
 gitops-drift --manifests ./manifests --dry-run --once --fail-on-drift --output json
 ```
 
-Exit code 0 means clean. Exit code 1 means drift was found. The JSON output can be parsed with `jq` for structured reporting.
+Exit code 0 means no drift was detected. Exit code 1 indicates drift. The JSON output can be parsed with `jq` for structured reporting.
 
 ## E2E test against a local cluster
 
+Activate the venv first, then run:
+
 ```bash
+source .venv/bin/activate
 ./scripts/e2e-kind.sh               # drift detection only
 REMEDIATE=true ./scripts/e2e-kind.sh  # also test remediation
 ```
@@ -158,24 +207,36 @@ See [scripts/e2e-kind.sh](scripts/e2e-kind.sh) for full details. Requires `kind`
 
 ## Assumptions and descoped areas
 
-**Resource scope**: Only Deployment, Service, ConfigMap, and Namespace are supported. StatefulSet, DaemonSet, CronJob, Ingress, and CRDs are not. Adding resource types is mechanically simple in `kubernetes_client.py`, but each kind has its own update and defaulting edge cases (e.g. StatefulSet update strategies, CRD validation). Keeping the scope narrow makes the tool easier to trust and explain.
+### Resource scope
+Only `Deployment`, `Service`, `ConfigMap`, and `Namespace` are supported. `StatefulSet`, `DaemonSet`, `CronJob`, `Ingress`, and CRDs are not included. Adding support is straightforward mechanically, but each resource has its own update semantics and edge cases (for example, StatefulSet update strategies or CRD validation). Keeping the scope narrow makes the behavior easier to reason about.
 
-**List diffing**: Lists of objects with `name` keys are matched by name, which avoids false positives from container reordering or sidecar injection. Lists without stable names fall back to positional comparison.
+### List diffing
+Lists of objects with `name` keys are matched by name to avoid false positives from container reordering or sidecar injection. Lists without stable identifiers fall back to positional comparison.
 
-**No multi-cluster support**: The tool reads a single kubeconfig context. Running across multiple clusters requires running separate instances.
+### No multi-cluster support
+The tool operates on a single kubeconfig context. Running across multiple clusters requires running separate instances.
 
-**No history or alerting**: The tool prints to stdout and logs. Integrating with Prometheus, PagerDuty, or Slack is out of scope -- the structured report format is designed to make that integration straightforward.
+### No history or alerting
+The tool reports to stdout and logs. Integrating with systems like Prometheus, PagerDuty, or Slack is out of scope, but the structured output is intended to make that straightforward.
 
-**No Helm or Kustomize**: Manifests must be plain YAML. Rendering templated formats is a separate concern.
+### No Helm or Kustomize
+Manifests are expected to be plain YAML. Template rendering is treated as a separate concern.
 
-## Interview discussion points
+---
 
-1. **Why custom diff instead of deepdiff?** A recursive diff of ~50 lines is easy to walk through in an interview and has no external dependencies. deepdiff is powerful but adds explanation overhead.
+## Design notes
 
-2. **Why full replace instead of strategic merge patch for remediation?** A replace is simple to reason about for a take-home implementation and attempts to converge the resource to Git. The cost is that it can overwrite fields managed by operators, so ignored fields are preserved before remediation and server-side apply is the recommended production path.
+### Why custom diff instead of deepdiff?
+A small recursive diff keeps the implementation easy to follow and avoids introducing an external dependency. `deepdiff` is more feature-rich, but adds complexity that isn’t necessary for this scope.
 
-3. **What breaks at scale?** Listing resources one at a time is fine for a handful of manifests. A production controller would use informers and a work queue. The current polling loop is appropriate for the scope.
+### Why full replace instead of strategic merge patch?
+Replace is simple to reason about and converges the resource to the desired state. The tradeoff is that it can overwrite fields managed elsewhere, which is why ignored fields are preserved. In a production setup, server-side apply would be the safer path.
 
-4. **How would you add StatefulSet support?** Add `StatefulSet` to `SUPPORTED_KINDS`, add `_get`/`_create`/`_replace` branches in `kubernetes_client.py`, and add a test fixture. The diff and normalization logic is resource-agnostic.
+### What breaks at scale?
+The current implementation fetches each configured resource by name, which works fine for a small manifest set. At scale, this would move to informers and a work queue.
 
-5. **Why is dry-run the default?** Because the cost of an unwanted apply is much higher than the cost of one extra flag. Any tool that touches production state should require an explicit opt-in.
+### How would you add StatefulSet support?
+Add `StatefulSet` to `SUPPORTED_KINDS`, implement `_get`, `_create`, and `_replace` in `kubernetes_client.py`, and add test coverage. The diff and normalization logic remains unchanged.
+
+### Why is dry-run the default?
+Because the cost of an unintended apply is higher than the cost of requiring one extra flag. Any tool that modifies cluster state should require explicit opt-in.
