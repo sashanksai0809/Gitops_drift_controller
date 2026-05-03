@@ -109,6 +109,14 @@ def test_extra_ignore_strips_field():
     assert "replicas" not in result["spec"]
 
 
+def test_null_annotations_does_not_crash():
+    # The API server can return metadata.annotations: null after a full replace.
+    # normalize() must handle None without AttributeError.
+    obj = {"metadata": {"name": "x", "annotations": None}, "spec": {}}
+    result = normalize(obj)
+    assert result["metadata"].get("annotations") in (None, {})
+
+
 def test_extra_ignore_nested():
     obj = {"metadata": {"name": "x"}, "spec": {"template": {"spec": {"serviceAccount": "default"}}}}
     result = normalize(obj, extra_ignore=["spec.template.spec.serviceAccount"])

@@ -284,6 +284,57 @@ def test_manifest_for_remediation_is_not_mutated(monkeypatch):
     )
 
 
+def test_run_once_reports_would_create_when_resource_missing(monkeypatch, tmp_path):
+    """A resource defined in Git but absent from the cluster must appear as would-create."""
+    desired = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": "web", "namespace": "default"},
+        "spec": {"replicas": 3},
+    }
+    (tmp_path / "deployment.yaml").write_text(yaml.safe_dump(desired))
+
+    monkeypatch.setattr("gitops_drift.reconciler.fetch_live_resource", lambda *_: None)
+    monkeypatch.setattr("gitops_drift.reconciler.print_report", lambda _e, **_kw: None)
+    monkeypatch.setattr("gitops_drift.reconciler.print_summary", lambda _e, **_kw: None)
+
+    cfg = ControllerConfig(manifests_dir=str(tmp_path), namespace="default", dry_run=True)
+    entries = run_once(cfg)
+
+    assert len(entries) == 1
+    assert entries[0]["action"] == "would-create (dry-run)"
+    assert entries[0]["fields"][0]["path"] == "<resource>"
+
+
+def test_run_once_alert_only_action_without_dry_run_or_remediate(monkeypatch, tmp_path):
+    """--no-dry-run without --remediate should produce action 'drift-detected' (no suffix)."""
+    desired = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": "web", "namespace": "default"},
+        "spec": {"replicas": 3},
+    }
+    (tmp_path / "deployment.yaml").write_text(yaml.safe_dump(desired))
+
+    monkeypatch.setattr(
+        "gitops_drift.reconciler.fetch_live_resource",
+        lambda *_: {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {"name": "web", "namespace": "default", "resourceVersion": "1"},
+            "spec": {"replicas": 1},
+        },
+    )
+    monkeypatch.setattr("gitops_drift.reconciler.print_report", lambda _e, **_kw: None)
+    monkeypatch.setattr("gitops_drift.reconciler.print_summary", lambda _e, **_kw: None)
+
+    cfg = ControllerConfig(manifests_dir=str(tmp_path), namespace="default", dry_run=False, remediate=False)
+    entries = run_once(cfg)
+
+    assert len(entries) == 1
+    assert entries[0]["action"] == "drift-detected"
+
+
 def test_run_once_logs_git_revision(monkeypatch, tmp_path, caplog):
     """run_once must log the Git revision so every cycle is auditable."""
     import logging

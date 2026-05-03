@@ -12,12 +12,10 @@ logger = logging.getLogger(__name__)
 
 
 def load_manifests(directory: str, default_namespace: str = "default") -> List[Dict]:
-    """
-    Walk a directory and parse every .yaml / .yml file as Kubernetes manifests.
-    Multi-document YAML files (separated by ---) are fully supported.
-    Resources with unsupported kinds are skipped with a warning.
-    Duplicate resources (same kind/namespace/name) are skipped with a warning;
-    only the first definition encountered is used.
+    """Load supported Kubernetes manifests from a directory.
+
+    Multi-document YAML files are supported. Unsupported kinds and duplicate
+    kind/namespace/name entries are skipped with warnings.
     """
     manifests = []
     seen_keys: set = set()

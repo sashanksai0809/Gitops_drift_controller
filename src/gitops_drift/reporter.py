@@ -63,9 +63,7 @@ def print_report(entries: List[Dict], as_json: bool = False, revision: str = Non
     print("=" * 60)
 
     for entry in entries:
-        resource_id = f"{entry['kind']}/{entry['name']}"
-        if entry["namespace"]:
-            resource_id += f" (ns: {entry['namespace']})"
+        resource_id = f"{entry['kind']}/{entry['name']} (ns: {entry['namespace']})"
 
         print(f"\n{_BOLD}{_YELLOW}{resource_id}{_RESET}")
         print(f"  Action : {_action_color(entry['action'])}{entry['action']}{_RESET}")
@@ -81,8 +79,13 @@ def print_report(entries: List[Dict], as_json: bool = False, revision: str = Non
     print(f"Total: {len(entries)} resource(s) drifted, {total} field(s) changed\n")
 
 
-def print_summary(entries: List[Dict], dry_run: bool, revision: str = None) -> None:
-    mode = "dry-run" if dry_run else "remediation"
+def print_summary(entries: List[Dict], dry_run: bool, remediate: bool = False, revision: str = None) -> None:
+    if dry_run:
+        mode = "dry-run"
+    elif remediate:
+        mode = "remediation"
+    else:
+        mode = "alert"
     logger.info(
         "Reconciliation complete [mode=%s, revision=%s]: %d drifted resource(s)",
         mode,
@@ -92,6 +95,8 @@ def print_summary(entries: List[Dict], dry_run: bool, revision: str = None) -> N
 
 
 def _action_color(action: str) -> str:
+    if "remediation-failed" in action.lower():
+        return _RED
     if "remediat" in action.lower() or "applied" in action.lower():
         return _GREEN
     if "dry" in action.lower():

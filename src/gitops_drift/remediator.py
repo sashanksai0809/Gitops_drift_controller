@@ -12,7 +12,7 @@ def remediate(manifest: Dict, diffs: List[Dict]) -> str:
     """
     Re-apply the desired manifest to the cluster.
 
-    This take-home uses a full replace because it is simple to reason about and
+    This controller uses a full replace because it is simple to reason about and
     attempts to converge the resource to Git. Ignored-field preservation happens
     before this function is called, so fields such as HPA-managed replicas keep
     their live values in the replace body. Server-side apply with a dedicated

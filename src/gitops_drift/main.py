@@ -58,7 +58,7 @@ Examples:
     parser.add_argument("--kubeconfig", default=None, help="Path to kubeconfig file (defaults to ~/.kube/config)")
     parser.add_argument("--ignore-fields", default="", help="Comma-separated extra field paths to ignore globally")
     parser.add_argument("--output", choices=["text", "json"], default="text", help="Report output format (default: text)")
-    parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Log verbosity (default: INFO)")
     parser.add_argument(
         "--fail-on-drift",
         action="store_true",
@@ -78,7 +78,7 @@ def main():
         datefmt="%H:%M:%S",
     )
 
-    # --remediate takes precedence because it is the explicit write mode.
+    # --remediate takes precedence since it explicitly turns on write behavior.
     dry_run = args.dry_run and not args.remediate
 
     cfg = ControllerConfig(

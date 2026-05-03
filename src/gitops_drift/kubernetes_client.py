@@ -1,4 +1,4 @@
-"""Thin wrapper around the Kubernetes Python client."""
+"""Small helper around the Kubernetes Python client."""
 
 import copy
 import logging

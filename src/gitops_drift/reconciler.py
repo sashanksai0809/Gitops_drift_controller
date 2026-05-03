@@ -9,7 +9,7 @@ from typing import List, Dict
 from .config import ControllerConfig, IGNORE_ANNOTATION
 from .loader import load_manifests, resource_key
 from .kubernetes_client import fetch_live_resource
-from .normalizer import normalize, get_nested, set_nested
+from .normalizer import normalize, get_nested, set_nested, _MISSING
 from .diff_engine import compute_diff
 from .reporter import build_report_entry, print_report, print_summary
 from .remediator import remediate
@@ -89,7 +89,7 @@ def run_once(cfg: ControllerConfig) -> List[Dict]:
         )
 
     print_report(report_entries, as_json=(cfg.output == "json"), revision=revision)
-    print_summary(report_entries, dry_run=cfg.dry_run, revision=revision)
+    print_summary(report_entries, dry_run=cfg.dry_run, remediate=cfg.remediate, revision=revision)
     return report_entries
 
 
@@ -165,7 +165,7 @@ def _manifest_for_remediation(
             if not parts:
                 continue
             live_value = get_nested(live_raw, parts)
-            if live_value is not None:
+            if live_value is not _MISSING:
                 set_nested(manifest_copy, parts, live_value)
                 logger.debug(
                     "Preserved live value for ignored field '%s' in remediation body",
