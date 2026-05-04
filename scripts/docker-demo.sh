@@ -61,9 +61,12 @@ else
 fi
 
 # kind's kubeconfig uses 127.0.0.1, which is the host's loopback.
-# Containers cannot reach that address directly -- rewrite it to the host alias.
+# Containers cannot reach that address directly, so rewrite it to the host
+# alias. Keep TLS verification pinned to localhost because kind's API server
+# certificate includes localhost, not host.docker.internal.
 kind get kubeconfig --name "${CLUSTER_NAME}" \
     | sed "s/127\\.0\\.0\\.1/${DOCKER_HOST_ADDR}/g" \
+    | awk '{ print } /server: / { print "    tls-server-name: localhost" }' \
     > "${KUBECONFIG_TMP}"
 log_ok "Kubeconfig ready (server: ${DOCKER_HOST_ADDR})."
 
