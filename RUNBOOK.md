@@ -155,6 +155,14 @@ No drift detected.
 
 Make changes directly in the cluster, simulating what happens after an incident hotfix or a manual `kubectl edit` that never gets pushed back to Git.
 
+Run all drift changes at once:
+
+```bash
+./scripts/inject-drift.sh
+```
+
+Or run the individual changes by hand:
+
 **Deployment: change the image**
 
 ```bash

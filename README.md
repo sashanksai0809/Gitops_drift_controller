@@ -52,8 +52,7 @@ kubectl apply -f examples/desired/
 python3 -m gitops_drift.main --manifests ./examples/desired --namespace default --dry-run --once
 
 # 5. Simulate drift
-kubectl set image deployment/demo-app demo-app=nginx:1.19
-kubectl patch deployment demo-app -p '{"spec":{"template":{"spec":{"containers":[{"name":"demo-app","resources":{"limits":{"cpu":"500m","memory":"512Mi"}}}]}}}}'
+./scripts/inject-drift.sh
 
 # 6. Detect drift
 python3 -m gitops_drift.main --manifests ./examples/desired --namespace default --dry-run --once

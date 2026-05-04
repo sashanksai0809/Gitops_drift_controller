@@ -42,18 +42,7 @@ if [[ "${LOOP}" == "1" ]]; then
 
   echo ""
   echo "==> Injecting drift while the controller is running..."
-  kubectl set image deployment/demo-app demo-app=nginx:1.19
-  kubectl patch deployment demo-app --patch '
-spec:
-  template:
-    spec:
-      containers:
-      - name: demo-app
-        resources:
-          limits:
-            cpu: "500m"
-            memory: "512Mi"
-'
+  "${REPO_ROOT}/scripts/inject-drift.sh"
   echo "    Drift injected. Waiting for the next reconciliation cycle (${INTERVAL}s)..."
   sleep $(( INTERVAL + 3 ))
 
@@ -85,22 +74,8 @@ python3 -m gitops_drift.main \
   --once
 
 echo ""
-echo "==> Introducing drift: changing image to nginx:1.19..."
-kubectl set image deployment/demo-app demo-app=nginx:1.19
-
-echo ""
-echo "==> Introducing drift: bumping resource limits..."
-kubectl patch deployment demo-app --patch '
-spec:
-  template:
-    spec:
-      containers:
-      - name: demo-app
-        resources:
-          limits:
-            cpu: "500m"
-            memory: "512Mi"
-'
+echo "==> Introducing drift..."
+"${REPO_ROOT}/scripts/inject-drift.sh"
 
 echo ""
 echo "==> Waiting for deployment to roll out with drifted state..."
