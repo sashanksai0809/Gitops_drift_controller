@@ -26,6 +26,7 @@ An end-to-end drift detection flow is available via:
 
 - [`scripts/e2e-kind.sh`](scripts/e2e-kind.sh) for automated testing
 - Manual drift simulation using `kubectl set image` and `kubectl patch` (see Quick Start below)
+- [`scripts/docker-demo.sh`](scripts/docker-demo.sh) as an optional shortcut covering steps 1-4 without a local Python environment (see [RUNBOOK.md](RUNBOOK.md))
 
 ## Assumptions
 
@@ -130,11 +131,21 @@ Total: 4 resource(s) drifted, 5 field(s) changed
 
 Container paths use `[name=<container-name>]` notation. Containers are matched by name rather than position, so sidecar injection or reordering does not produce false positives.
 
-## Exclusion mechanism
+## Exclusion mechanisms
 
-Add the annotation `drift.gitops.io/ignore-fields` to any manifest with a comma-separated list of dot-notation field paths.
+Two annotations control what the controller checks.
 
-Ignored fields are excluded from drift detection. During remediation, the controller preserves the current live value for those fields in the replace body, so externally managed fields such as HPA-controlled `spec.replicas` are not reset.
+### Skip an entire resource
+
+```yaml
+metadata:
+  annotations:
+    drift.gitops.io/skip: "true"
+```
+
+The resource is not fetched and does not appear in the drift report. Common cases: a ConfigMap managed by an external operator, a Deployment diverged intentionally during a canary rollout, or a resource mid-migration.
+
+### Ignore specific fields
 
 ```yaml
 metadata:
@@ -142,7 +153,15 @@ metadata:
     drift.gitops.io/ignore-fields: "spec.replicas,metadata.labels.env"
 ```
 
+The listed fields are excluded from the diff. During remediation, the controller reads the current live value for each ignored field and injects it into the replace body, so externally managed fields such as HPA-controlled `spec.replicas` are not reset.
+
 The example deployment uses this to allow an HPA to manage `spec.replicas` without the controller treating every scale event as drift.
+
+`--ignore-fields` applies the same exclusion to every resource in the run:
+
+```bash
+gitops-drift --manifests ./manifests --ignore-fields "spec.replicas"
+```
 
 ## In-cluster deployment
 

@@ -5,7 +5,7 @@ Quick reference for running the controller locally, injecting drift, and testing
 ## Prerequisites
 
 - Python 3.9+
-- [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation)
+- [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation) or [k3d](https://k3d.io/#installation)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - [jq](https://jqlang.github.io/jq/)
 - [Docker Desktop for Mac](https://docs.docker.com/desktop/install/mac-install/) (needs to be running before anything else)
@@ -22,7 +22,31 @@ docker info
 
 ---
 
-## 1. Create a local kind cluster
+## Optional shortcut: Docker demo for steps 1-4
+
+If you have Docker and kind installed, `scripts/docker-demo.sh` can run the setup and first dry-run without installing Python dependencies locally:
+
+```bash
+./scripts/docker-demo.sh
+```
+
+The script creates a kind cluster on the host, builds the controller image (which packages the controller and kubectl), applies the example manifests using that image, and runs a dry-run detection. It covers steps 1-4 only.
+
+To continue from step 5 (inject drift) after the script finishes, keep the cluster alive:
+
+```bash
+KEEP_CLUSTER=true ./scripts/docker-demo.sh
+```
+
+Then pick up from step 5 below using your local kubectl against `kind-drift-demo`.
+
+> **Linux note:** Docker Desktop is Mac/Windows only. On Linux, set `DOCKER_HOST_ADDR=172.17.0.1` (the Docker bridge gateway) before running the script.
+
+---
+
+## 1. Create a local cluster (kind or k3s)
+
+### kind
 
 ```bash
 ./scripts/setup-kind.sh
@@ -30,11 +54,29 @@ docker info
 
 Spins up a cluster called `drift-demo` and checks it's reachable. If you already have a cluster you want to use, skip this and make sure `kubectl config current-context` is pointing at the right one.
 
-If you'd rather do it by hand:
+To create it by hand:
 
 ```bash
 kind create cluster --name drift-demo
 kubectl cluster-info --context kind-drift-demo
+```
+
+### k3s (via k3d)
+
+k3d runs k3s clusters inside Docker. The controller works against k3s the same way it does against kind -- the API surface it uses (`get`, `create`, `update` on Deployments, Services, ConfigMaps, Namespaces) is standard across both.
+
+```bash
+brew install k3d
+k3d cluster create drift-demo
+kubectl config use-context k3d-drift-demo
+```
+
+For steps 2 onwards, use the same commands. The only difference is the context name prefix (`k3d-` instead of `kind-`).
+
+To tear down a k3d cluster when you're done:
+
+```bash
+k3d cluster delete drift-demo
 ```
 
 ---
@@ -372,3 +414,9 @@ Manifest is too noisy. Don't paste directly from `kubectl get -o yaml` without s
 
 **`ApiException: (409) Conflict` during remediation**
 Race between the fetch and replace. The error is logged and skipped; the next loop iteration picks up the fresh state.
+
+**k3d: `kubectl` commands fail with `connection refused` after cluster creation**
+k3d may take a few seconds to be fully ready. Run `kubectl wait --for=condition=Ready node --all --timeout=60s` and retry.
+
+**k3d: context name is wrong**
+k3d prefixes cluster names with `k3d-`. If you created `drift-demo`, the context is `k3d-drift-demo`. Check with `kubectl config get-contexts`.
