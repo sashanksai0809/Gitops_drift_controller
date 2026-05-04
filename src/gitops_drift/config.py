@@ -16,9 +16,8 @@ SYSTEM_MANAGED_FIELDS = [
     "status",
 ]
 
-# Resource types this tool explicitly supports. Keeping the scope narrow is
-# intentional -- broader coverage is straightforward to add, but each type
-# can have edge cases worth handling individually.
+# Resource types this tool explicitly supports. Scope is narrow intentionally --
+# each type has its own update semantics and error cases worth handling separately.
 SUPPORTED_KINDS = {"Deployment", "Service", "ConfigMap", "Namespace"}
 
 # Annotation key used to mark specific fields as intentionally allowed to drift.
