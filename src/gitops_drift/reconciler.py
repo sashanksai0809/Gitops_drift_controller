@@ -32,7 +32,6 @@ def run_once(cfg: ControllerConfig) -> List[Dict]:
             logger.info("Skipping %s/%s -- drift.gitops.io/skip annotation", kind, name)
             continue
 
-        # Use the namespace from the manifest; fall back to the configured default.
         effective_ns = _effective_namespace(kind, namespace, cfg.namespace)
 
         logger.debug("Checking %s/%s (namespace=%s)", kind, name, effective_ns)
@@ -120,9 +119,8 @@ def _get_ignore_fields(manifest: Dict, global_ignores: List[str]) -> List[str]:
     """
     annotation_val = (
         manifest.get("metadata", {})
-        .get("annotations", {})
-        .get(IGNORE_ANNOTATION, "")
-    )
+        .get("annotations") or {}
+    ).get(IGNORE_ANNOTATION, "")
     annotation_fields = [f.strip() for f in annotation_val.split(",") if f.strip()]
     return annotation_fields + (global_ignores or [])
 
