@@ -8,7 +8,7 @@ The tool reads Kubernetes manifests, compares them with the current cluster stat
 
 This project is not intended to replace tools like ArgoCD or Flux. Those systems handle full GitOps workflows: sync orchestration, rollbacks, multi-cluster management, and integration with tools like Helm or Kustomize.
 
-Keeping the scope small makes the behavior easier to reason about and allows it to be used alongside an existing GitOps setup rather than as a full platform.
+Keeping the scope small makes the behavior predictable and allows it to sit alongside an existing GitOps setup rather than replace one.
 
 ## Design
 
@@ -132,7 +132,7 @@ Container paths use `[name=<container-name>]` notation. Containers are matched b
 
 ## Exclusion mechanisms
 
-Two annotations control what the controller checks.
+Two annotations and a global CLI flag control what the controller checks.
 
 ### Skip an entire resource
 
@@ -180,10 +180,10 @@ metadata:
 rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs: ["get", "list", "create", "update"]  # list included for future inverse-drift detection
+    verbs: ["get", "list", "create", "update"]
   - apiGroups: [""]
     resources: ["services", "configmaps", "namespaces"]
-    verbs: ["get", "list", "create", "update"]  # list included for future inverse-drift detection
+    verbs: ["get", "list", "create", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -226,7 +226,7 @@ See [scripts/e2e-kind.sh](scripts/e2e-kind.sh) for full details. Requires `kind`
 ## Assumptions and descoped areas
 
 ### Resource scope
-Only `Deployment`, `Service`, `ConfigMap`, and `Namespace` are supported. `StatefulSet`, `DaemonSet`, `CronJob`, `Ingress`, and CRDs are not included. Adding support is straightforward mechanically, but each resource has its own update semantics and edge cases (for example, StatefulSet update strategies or CRD validation). Keeping the scope narrow makes the behavior easier to reason about.
+Only `Deployment`, `Service`, `ConfigMap`, and `Namespace` are supported. `StatefulSet`, `DaemonSet`, `CronJob`, `Ingress`, and CRDs are not included. Adding support is mechanical, but each resource type has its own update semantics and edge cases (for example, StatefulSet update strategies or CRD validation). Keeping the scope narrow means each type can be handled deliberately.
 
 ### List diffing
 Lists of objects with `name` keys are matched by name to avoid false positives from container reordering or sidecar injection. Lists without stable identifiers fall back to positional comparison.
