@@ -39,8 +39,8 @@ def normalize(obj: Dict, extra_ignore: List[str] = None) -> Dict:
     for path in _system_paths:
         _delete_path(result, path)
 
-    # Also strip the last-applied annotation that kubectl injects -- it encodes
-    # the full previous manifest as a JSON string and would make every diff noisy.
+    # Strip the last-applied annotation kubectl injects -- it encodes the full
+    # previous manifest as a JSON string and would clutter the diff output.
     annotations = result.get("metadata", {}).get("annotations") or {}
     annotations.pop("kubectl.kubernetes.io/last-applied-configuration", None)
 

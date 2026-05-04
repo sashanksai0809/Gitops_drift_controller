@@ -18,10 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def run_once(cfg: ControllerConfig) -> List[Dict]:
-    """
-    Run a single reconciliation cycle.
-    Returns the list of drift report entries (one per drifted resource).
-    """
+    """Run a single reconciliation cycle and return the drift report entries."""
     revision = _get_git_revision(cfg.manifests_dir)
     logger.info("Reconciling against Git revision %s", revision)
 
@@ -94,11 +91,10 @@ def run_once(cfg: ControllerConfig) -> List[Dict]:
 
 
 def _get_git_revision(directory: str) -> str:
-    """Return the HEAD commit SHA of the git repo containing the manifests directory.
+    """Return the HEAD commit SHA for the manifests directory.
 
-    Logs which commit the controller is comparing against, making every
-    reconciliation cycle auditable. Returns 'unknown' if the directory is not
-    inside a git repository or if git is unavailable.
+    Used to log exactly which Git commit the controller is comparing against.
+    Returns 'unknown' if the directory is not inside a git repo or git is unavailable.
     """
     try:
         result = subprocess.run(
@@ -141,18 +137,15 @@ def _manifest_for_remediation(
     live_raw: Dict = None,
     ignore_fields: List[str] = None,
 ) -> Dict:
-    """Build a safe remediation body from the desired manifest.
+    """Build the remediation body for a full replace.
 
-    Three things happen here:
-    1. Deep-copy so we never mutate the manifest loaded from disk.
-    2. Inject the effective namespace (skipped for cluster-scoped resources).
-    3. For every ignored field, copy the CURRENT LIVE VALUE into the body.
+    Deep-copies the manifest so the in-memory object is never modified.
+    Injects the effective namespace for namespaced resources.
 
-    Step 3 is the critical safety fix: a full replace without it would send
-    the manifest's declared value for ignored fields (e.g. spec.replicas: 2)
-    to the API server, silently overwriting what an HPA or operator set (e.g.
-    spec.replicas: 7). By injecting the live value, the replace becomes a
-    no-op for those fields.
+    For each ignored field, reads the live value from the cluster and writes
+    it into the copy. Without this, a full replace would send the manifest's
+    declared value (e.g. spec.replicas: 2) and silently undo whatever an HPA
+    or operator had set on the cluster.
     """
     manifest_copy = copy.deepcopy(manifest)
 

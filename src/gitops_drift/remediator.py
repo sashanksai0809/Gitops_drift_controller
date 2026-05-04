@@ -9,14 +9,12 @@ logger = logging.getLogger(__name__)
 
 
 def remediate(manifest: Dict, diffs: List[Dict]) -> str:
-    """
-    Re-apply the desired manifest to the cluster.
+    """Re-apply the desired manifest to the cluster via full replace.
 
-    This controller uses a full replace because it is simple to reason about and
-    attempts to converge the resource to Git. Ignored-field preservation happens
-    before this function is called, so fields such as HPA-managed replicas keep
-    their live values in the replace body. Server-side apply with a dedicated
-    field manager is the recommended production path.
+    Ignored-field values are injected before this is called (see
+    _manifest_for_remediation), so excluded fields like HPA-managed replicas
+    keep their live values. Server-side apply with a named field manager is
+    the right long-term approach; full replace is used here for simplicity.
     """
     kind = manifest.get("kind", "")
     name = manifest.get("metadata", {}).get("name", "")

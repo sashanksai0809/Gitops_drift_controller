@@ -27,7 +27,7 @@ We use a one-directional comparison: fields present in the live object but absen
 
 ### List diffing: semantic name-based matching
 
-Lists of objects that all carry a `name` key (containers, init containers, volumes, environment variables, ports) are matched by name rather than by position. This is the semantically correct approach: Kubernetes itself identifies containers by name, not index, and admission webhooks frequently inject sidecars into the container list, shifting positions without changing intent.
+Lists of objects that all carry a `name` key (containers, init containers, volumes, environment variables, ports) are matched by name rather than by position. Kubernetes identifies containers by name, not index. Admission webhooks (Istio, Linkerd) frequently inject sidecars that shift positions. Positional comparison produces false positives; name-based matching does not.
 
 ```
 # Desired
@@ -45,7 +45,7 @@ containers:
     image: nginx:1.25
 ```
 
-With positional diffing this produces two false diffs. With name-based matching it produces zero diffs (correct). Lists without a consistent `name` key (plain string lists, numeric lists) fall back to positional comparison.
+Positional diffing produces two false diffs here. Name-based matching produces zero (correct). Lists without a consistent `name` key fall back to positional comparison.
 
 ### Immutable fields and representation drift
 
@@ -108,7 +108,7 @@ The normalizer uses a path-split traversal: `spec.replicas` becomes `["spec", "r
 
 The current system does not make this distinction automatically. The mode is set at run time by the operator, not inferred from the nature of the drift. This is a deliberate scope decision: the tool is not a policy engine.
 
-**Alert-only drift** is drift where human judgment is required before acting. An image tag change might be an intentional hotfix or a security incident; both warrant review before the old image is restored. A label being added might be load-balancer or service-mesh traffic routing that was applied manually for a specific reason. A resource missing from the cluster may have been intentionally deleted to shed load during an incident. In all these cases, the correct first response is to understand what happened, not to immediately converge to the manifest.
+**Alert-only drift** is drift where human judgment is required before acting. An image tag change might be an intentional hotfix or a security incident; both warrant review before the old image is restored. A label being added might be load-balancer or service-mesh traffic routing that was applied manually for a specific reason. A resource missing from the cluster may have been intentionally deleted to shed load during an incident. In all these cases, the right first response is to understand what happened, not to immediately re-apply the manifest.
 
 **Auto-remediable drift** is drift where convergence to Git state is always safe and has no external side effects. A ConfigMap field that was edited to `kubectl edit` and whose owning application tolerates a hot-reload is a candidate. Resource requests and limits that were bumped as a temporary measure are another. Even then, ConfigMap remediation is not automatically safe: workloads that do not hot-reload ConfigMaps require a pod restart before the new value takes effect, and updating a ConfigMap that controls feature flags or credentials is an application-visible change, not harmless metadata.
 
@@ -124,11 +124,11 @@ The current system does not make this distinction automatically. The mode is set
 
 When a resource is absent from the cluster entirely, the action is `would-create (dry-run)` in dry-run mode and `would-create` otherwise.
 
-The operator reviews the dry-run report and decides whether to re-run with `--remediate`. When `--remediate` is active, every drifted resource is re-applied. This is an intentionally blunt instrument. A production extension would add a per-resource annotation such as `drift.gitops.io/remediation-policy: auto|alert` and check it in `reconciler.py` before calling `remediator.remediate()`, allowing fine-grained control without changing the CLI.
+The operator reviews the dry-run report and decides whether to re-run with `--remediate`. When `--remediate` is active, every drifted resource is re-applied. This is an intentionally blunt instrument. A simple extension: add a per-resource annotation such as `drift.gitops.io/remediation-policy: auto|alert` and check it in `reconciler.py` before calling `remediator.remediate()`. Per-resource policy overrides the global flag without a CLI change.
 
 ### How exclusions and remediation interact: a critical correctness detail
 
-The exclusion mechanism and the remediation path are coupled in a way that is easy to get wrong. The naive implementation contains a silent data-loss bug: when a field is excluded from diff detection, it is removed from the comparison, but the remediation body is built from the original manifest, which still contains the manifest's declared value for that field. A full replace with that body sends the manifest's value to the API server, silently overwriting what an HPA or operator set.
+The exclusion mechanism and the remediation path have a silent failure mode that is easy to miss. The naive implementation contains a silent data-loss bug: when a field is excluded from diff detection, it is removed from the comparison, but the remediation body is built from the original manifest, which still contains the manifest's declared value for that field. A full replace with that body sends the manifest's value to the API server, silently overwriting what an HPA or operator set.
 
 Concretely: if `spec.replicas` is in the ignore list and an HPA has scaled the Deployment to 7 replicas, the manifest still says `spec.replicas: 2`. A replace with the unmodified manifest sends `spec.replicas: 2` to Kubernetes. The HPA's work is undone. The field was "excluded from drift detection" but not from the write operation.
 
@@ -157,7 +157,7 @@ The `normalizer.normalize()` function strips API-server-injected fields from bot
 - **Desired object**: The local YAML manifest does not contain these fields, but we still run it through `normalize()` for safety (e.g. if someone accidentally copies a `resourceVersion` into their manifest).
 - **Live object**: The API server always returns these fields. Stripping them ensures we only compare what was intentionally declared.
 
-The default system-managed fields are documented in `config.py` as `SYSTEM_MANAGED_FIELDS`. The implementation in `normalizer.py` also strips snake_case equivalents returned by the Kubernetes Python client's `to_dict()`: `metadata.resource_version`, `metadata.managed_fields`, `metadata.creation_timestamp`. The `kubectl.kubernetes.io/last-applied-configuration` annotation is stripped because it encodes the previous manifest as JSON and would make every diff noisy.
+The default system-managed fields are documented in `config.py` as `SYSTEM_MANAGED_FIELDS`. The implementation in `normalizer.py` also strips snake_case equivalents returned by the Kubernetes Python client's `to_dict()`: `metadata.resource_version`, `metadata.managed_fields`, `metadata.creation_timestamp`. The `kubectl.kubernetes.io/last-applied-configuration` annotation is stripped because it encodes the previous manifest as JSON and would show up as a change in every diff.
 
 After normalization, the diff is purely value-based: two normalized objects are in sync if and only if every field declared in the desired object has the same value in the live object.
 
@@ -207,7 +207,7 @@ drift-system/
 
 The current implementation uses a polling loop: every `--interval` seconds, it fetches each tracked resource from the API server by name and compares it against the manifest. This is correct and simple for a scoped tool, but it does not scale to production workloads with hundreds of resources, and detection latency is bounded by the interval rather than the time it takes for a change to propagate through the watch stream.
 
-A production-grade controller uses the Kubernetes **informer** framework. An informer maintains a local in-memory cache backed by a `List` + `Watch` stream. The initial `List` populates the cache; the `Watch` stream delivers change events (Added, Modified, Deleted) in near real-time. Instead of issuing O(n) `Get` calls on every interval, the controller maintains a single persistent connection per resource type and receives events the moment a resource changes. Detection latency drops from up to `--interval` seconds to the round-trip time for a watch event (typically sub-second).
+A production controller uses the Kubernetes **informer** framework. An informer maintains a local in-memory cache backed by a `List` + `Watch` stream. The initial `List` populates the cache; the `Watch` stream delivers change events (Added, Modified, Deleted) in near real-time. Instead of issuing O(n) `Get` calls on every interval, the controller maintains a single persistent connection per resource type and receives events the moment a resource changes. Detection latency drops from up to `--interval` seconds to the round-trip time for a watch event (typically sub-second).
 
 Informers are coupled to a **work queue**. When a change event arrives, the resource key (`namespace/name`) is enqueued rather than processed inline. A pool of worker goroutines dequeues keys and runs the reconcile logic. This decoupling makes retries and error handling explicit: a `RateLimitingQueue` applies exponential backoff to repeatedly-failing reconciles, preventing a single broken resource from starving healthy ones. It also naturally deduplicates: if the same resource changes twice before a worker processes it, the key is in the queue once, and only the latest state is read when the worker runs.
 
@@ -235,7 +235,7 @@ Full replace (`PUT /apis/apps/v1/namespaces/default/deployments/demo-app`) is se
 
 This creates a correctness problem for ignored fields. A replace body built from the manifest's declared value for `spec.replicas` will overwrite whatever the HPA set, even if `spec.replicas` is in the ignore list. The fix in this controller reads the live value for each ignored field and injects it into the replace body before applying, making the replace a no-op for those fields.
 
-**Server-side apply (SSA)** is the correct long-term approach. SSA introduces field ownership: when a manager (`field_manager`) first writes a field, it becomes that manager's property. Subsequent applies from the same manager can update only fields it owns. Fields owned by another manager (`spec.replicas` owned by the HPA's `horizontal-pod-autoscaler` manager) are left unchanged regardless of what appears in the body. This makes the ignore annotation unnecessary for the HPA case and handles most immutable-field conflicts gracefully, since the controller never claimed ownership of `spec.selector` and cannot accidentally change it.
+**Server-side apply (SSA)** is the correct long-term approach. SSA introduces field ownership: when a manager (`field_manager`) first writes a field, it becomes that manager's property. Subsequent applies from the same manager can update only fields it owns. Fields owned by another manager (`spec.replicas` owned by the HPA's `horizontal-pod-autoscaler` manager) are left unchanged regardless of what appears in the body. This makes the ignore annotation unnecessary for the HPA case and avoids most immutable-field conflicts: the controller never claimed ownership of `spec.selector`, so it cannot accidentally change it.
 
 The conflict model under SSA: if the drift controller attempts to apply a field currently owned by another manager, Kubernetes returns HTTP 409 Conflict. The caller can either back off (treat this field as if it were in the ignore list) or force-take ownership by setting `force=True`. Forcing is appropriate only when the controller is deliberately taking control of a field from another manager; it should be a deliberate operator decision, not a default.
 
@@ -245,17 +245,11 @@ This controller uses full replace for simplicity (see section 3 for the rational
 
 ## 8. Drift Classification: Alert vs. Auto-Remediate
 
-Not all drift is equal. A schema for classifying drift by remediation safety allows the controller to make fine-grained decisions without requiring an operator to be online for every event.
+The controller does not classify drift. Every drifted resource is either reported or remediated based on the flag passed at runtime, regardless of what changed. This is a scope decision: the tool is not a policy engine.
 
-A practical classification has three tiers:
+Most drift needs human judgment before acting. An image change could be an on-call engineer's rollback or a compromised pipeline. A replica count change could be the HPA working normally or someone scaling down to shed load during an incident. The controller cannot tell the difference.
 
-**Alert-only drift** covers any change where the correct response requires understanding context that the controller does not have. Image tag changes are the clearest example: `nginx:1.25` → `nginx:1.19` might be an intentional emergency rollback to a known-good version, or it might be an attacker who compromised a deployment pipeline. The controller can report the change but should not revert it without human review. Label mutations can break service selectors and traffic routing. Replica count changes above or below the HPA's target range may signal a resource starvation event.
-
-**Conditional auto-remediate** covers drift where remediation is safe under stated preconditions. A ConfigMap value change is safe to revert if the owning application hot-reloads ConfigMaps without a pod restart (true for some but not all frameworks). Resource request/limit changes are safe to revert if the rollout strategy allows it (zero-downtime rolling update with a sufficient pod count). These conditions should be encoded as annotations or controller configuration, not hardcoded.
-
-**Safe auto-remediate** covers drift that is always safe to revert: a missing label that has no traffic-routing effect, a field that was changed to an invalid value, or a resource that was deleted entirely and whose deletion has no downstream effect. These are rare and hard to identify without schema knowledge.
-
-**Extension point in the current controller:** add a per-resource annotation:
+A straightforward extension: add a per-resource annotation:
 
 ```yaml
 metadata:
@@ -263,7 +257,7 @@ metadata:
     drift.gitops.io/remediation-policy: "alert"  # or "auto"
 ```
 
-In `reconciler.py`, before calling `remediator.remediate()`, check this annotation. If the policy is `alert`, record the drift but skip remediation regardless of whether `--remediate` is active. This annotation takes effect at the resource level; a global `--remediate` flag can be the default, with per-resource annotations overriding it for sensitive resources.
+Check it in `reconciler.py` before calling `remediator.remediate()`. If the policy is `alert`, record the drift but skip the write regardless of `--remediate`. Per-resource annotations override the global flag for sensitive resources.
 
 ---
 

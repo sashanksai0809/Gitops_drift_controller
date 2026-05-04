@@ -167,6 +167,14 @@ log_ok "--fail-on-drift correctly returned non-zero."
 
 # Step 7: Optional remediation
 if [ "${REMEDIATE}" = "true" ]; then
+    # Revert Service label drift before running remediation.
+    # The controller uses full replace; Services reject a replace body that omits
+    # spec.clusterIP (immutable after creation) with HTTP 422. The Service would
+    # remain drifted after remediation and break the POST_COUNT == 0 check below.
+    kubectl patch service demo-app -n "${NAMESPACE}" \
+        --patch '{"metadata":{"labels":{"app":"demo-app"}}}'
+    sleep 1
+
     log_step "Running remediation (--remediate --once)..."
     run_controller --remediate --once
 

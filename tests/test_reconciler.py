@@ -161,16 +161,8 @@ def test_get_git_revision_returns_unknown_for_nonexistent_directory():
 # ---------------------------------------------------------------------------
 
 def test_remediation_preserves_ignored_fields_from_live(monkeypatch):
-    """
-    Ignored fields must keep their live values during remediation.
-
-    Scenario: spec.replicas is excluded via annotation (simulating an HPA).
-    The HPA has scaled the Deployment to 5 replicas. The desired manifest says 2.
-    The container image has drifted (nginx:1.19 vs desired nginx:1.25).
-
-    Expected: remediation fixes the image but sends spec.replicas=5 (live value)
-    in the apply body, not spec.replicas=2 from the manifest.
-    """
+    # Image is drifted; spec.replicas is excluded (simulates HPA managing scale).
+    # The replace body must carry the live replica count, not the manifest value.
     manifest = {
         "apiVersion": "apps/v1",
         "kind": "Deployment",

@@ -14,7 +14,7 @@ Keeping the scope small makes the behavior easier to reason about and allows it 
 
 The overall architecture, reconciliation loop, diff behavior, and remediation approach are documented in [DESIGN.md](DESIGN.md).
 
-The focus is on keeping the reconciliation logic simple and easy to reason about while handling common Kubernetes edge cases like defaulted fields and list ordering.
+The focus is on keeping the reconciliation loop straightforward while correctly handling Kubernetes edge cases: defaulted fields and list reordering from sidecar injection.
 
 ## Runbook
 
@@ -230,7 +230,7 @@ Manifests are expected to be plain YAML. Template rendering is treated as a sepa
 A small recursive diff keeps the implementation easy to follow and avoids introducing an external dependency. `deepdiff` is more feature-rich, but adds complexity that isn’t necessary for this scope.
 
 ### Why full replace instead of strategic merge patch?
-Replace is simple to reason about and converges the resource to the desired state. The tradeoff is that it can overwrite fields managed elsewhere, which is why ignored fields are preserved. In a production setup, server-side apply would be the safer path.
+Replace is predictable: the body you send becomes the new state. The tradeoff is that it can overwrite fields managed by other controllers, which is why ignored fields are preserved. Server-side apply is the safer production path.
 
 ### What breaks at scale?
 The current implementation fetches each configured resource by name, which works fine for a small manifest set. At scale, this would move to informers and a work queue.
