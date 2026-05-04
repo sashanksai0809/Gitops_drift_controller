@@ -48,6 +48,13 @@ run_controller() {
         "$@" 2>/dev/null
 }
 
+run_controller_text() {
+    python3 -m gitops_drift.main \
+        --manifests "${MANIFESTS_DIR}" \
+        --namespace "${NAMESPACE}" \
+        "$@"
+}
+
 cleanup() {
     if [ "${KEEP_CLUSTER}" = "false" ]; then
         log_step "Tearing down kind cluster '${CLUSTER_NAME}'..."
@@ -157,6 +164,12 @@ assert_eq "spec.replicas correctly excluded from report" "false" "${REPLICA_DRIF
 echo ""
 echo "  Drift report:"
 echo "${DRIFT_REPORT}" | jq '.resources[] | .kind + "/" + .name as $resource | .fields[] | "  \($resource) \(.path): \(.desired) -> \(.live)"' -r | sed 's/^/    /'
+
+echo ""
+echo "  Detailed controller report:"
+echo "------------------------------------------------------------"
+run_controller_text --dry-run --once
+echo "------------------------------------------------------------"
 
 # Verify --fail-on-drift exits non-zero.
 log_step "Verifying --fail-on-drift exits non-zero when drift exists..."
