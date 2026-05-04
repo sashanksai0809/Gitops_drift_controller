@@ -366,7 +366,7 @@ To see the controller catch drift live mid-run, use loop mode. It starts the con
 LOOP=1 ./scripts/demo-drift.sh
 ```
 
-The interval defaults to 15 seconds. we can override it with `INTERVAL=<seconds>`:
+The interval defaults to 15 seconds. You can override it with `INTERVAL=<seconds>`:
 
 ```bash
 LOOP=1 INTERVAL=30 ./scripts/demo-drift.sh
