@@ -21,9 +21,14 @@ SYSTEM_MANAGED_FIELDS = [
 # can have edge cases worth handling individually.
 SUPPORTED_KINDS = {"Deployment", "Service", "ConfigMap", "Namespace"}
 
-# Annotation key used to mark fields as intentionally allowed to drift.
+# Annotation key used to mark specific fields as intentionally allowed to drift.
 # Example: drift.gitops.io/ignore-fields: "spec.replicas,metadata.labels.env"
 IGNORE_ANNOTATION = "drift.gitops.io/ignore-fields"
+
+# Annotation key used to exclude an entire resource from drift detection.
+# Set to "true" to skip the resource.
+# Example: drift.gitops.io/skip: "true"
+SKIP_ANNOTATION = "drift.gitops.io/skip"
 
 
 @dataclass

@@ -147,12 +147,12 @@ def test_get_git_revision_returns_sha_for_git_repo(tmp_path):
 
 
 def test_get_git_revision_returns_unknown_outside_repo(tmp_path):
-    """Revision should degrade gracefully to 'unknown' in a plain directory."""
+    """_get_git_revision returns 'unknown' for a plain directory with no git repo."""
     assert _get_git_revision(str(tmp_path)) == "unknown"
 
 
 def test_get_git_revision_returns_unknown_for_nonexistent_directory():
-    """Revision should degrade gracefully when the directory does not exist."""
+    """_get_git_revision returns 'unknown' when the directory does not exist."""
     assert _get_git_revision("/nonexistent/path/xyz") == "unknown"
 
 
@@ -327,8 +327,80 @@ def test_run_once_alert_only_action_without_dry_run_or_remediate(monkeypatch, tm
     assert entries[0]["action"] == "drift-detected"
 
 
+# ---------------------------------------------------------------------------
+# Skip annotation tests
+# ---------------------------------------------------------------------------
+
+def test_run_once_skips_resource_with_skip_annotation(monkeypatch, tmp_path):
+    """A manifest with drift.gitops.io/skip: 'true' must not be fetched or reported."""
+    skipped = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": "canary",
+            "namespace": "default",
+            "annotations": {"drift.gitops.io/skip": "true"},
+        },
+        "spec": {"replicas": 1},
+    }
+    checked = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": "web", "namespace": "default"},
+        "spec": {"replicas": 3},
+    }
+    (tmp_path / "canary.yaml").write_text(yaml.safe_dump(skipped))
+    (tmp_path / "web.yaml").write_text(yaml.safe_dump(checked))
+
+    fetch_calls = []
+
+    def fake_fetch(kind, name, namespace):
+        fetch_calls.append(name)
+        return {**checked, "metadata": {**checked["metadata"], "resourceVersion": "1"}}
+
+    monkeypatch.setattr("gitops_drift.reconciler.fetch_live_resource", fake_fetch)
+    monkeypatch.setattr("gitops_drift.reconciler.print_report", lambda _e, **_kw: None)
+    monkeypatch.setattr("gitops_drift.reconciler.print_summary", lambda _e, **_kw: None)
+
+    cfg = ControllerConfig(manifests_dir=str(tmp_path), namespace="default", dry_run=True)
+    entries = run_once(cfg)
+
+    assert "canary" not in fetch_calls, "skipped resource must not be fetched"
+    assert not any(e["name"] == "canary" for e in entries), "skipped resource must not appear in report"
+
+
+def test_run_once_skip_annotation_false_does_not_skip(monkeypatch, tmp_path):
+    """drift.gitops.io/skip: 'false' must not skip the resource."""
+    manifest = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": "web",
+            "namespace": "default",
+            "annotations": {"drift.gitops.io/skip": "false"},
+        },
+        "spec": {"replicas": 3},
+    }
+    (tmp_path / "web.yaml").write_text(yaml.safe_dump(manifest))
+
+    fetch_calls = []
+
+    def fake_fetch(kind, name, namespace):
+        fetch_calls.append(name)
+        return {**manifest, "metadata": {**manifest["metadata"], "resourceVersion": "1"}}
+
+    monkeypatch.setattr("gitops_drift.reconciler.fetch_live_resource", fake_fetch)
+    monkeypatch.setattr("gitops_drift.reconciler.print_report", lambda _e, **_kw: None)
+    monkeypatch.setattr("gitops_drift.reconciler.print_summary", lambda _e, **_kw: None)
+
+    cfg = ControllerConfig(manifests_dir=str(tmp_path), namespace="default", dry_run=True)
+    run_once(cfg)
+
+    assert "web" in fetch_calls
+
+
 def test_run_once_logs_git_revision(monkeypatch, tmp_path, caplog):
-    """run_once must log the Git revision so every cycle is auditable."""
+    """run_once must log the Git revision at the start of each reconciliation."""
     import logging
 
     desired = {

@@ -6,7 +6,7 @@ import os
 import subprocess
 from typing import List, Dict
 
-from .config import ControllerConfig, IGNORE_ANNOTATION
+from .config import ControllerConfig, IGNORE_ANNOTATION, SKIP_ANNOTATION
 from .loader import load_manifests, resource_key
 from .kubernetes_client import fetch_live_resource
 from .normalizer import normalize, get_nested, set_nested, _MISSING
@@ -27,6 +27,10 @@ def run_once(cfg: ControllerConfig) -> List[Dict]:
 
     for manifest in manifests:
         kind, namespace, name = resource_key(manifest)
+
+        if _should_skip(manifest):
+            logger.info("Skipping %s/%s -- drift.gitops.io/skip annotation", kind, name)
+            continue
 
         # Use the namespace from the manifest; fall back to the configured default.
         effective_ns = _effective_namespace(kind, namespace, cfg.namespace)
@@ -129,6 +133,12 @@ def _effective_namespace(kind: str, manifest_namespace: str, default_namespace: 
     if kind == "Namespace":
         return ""
     return manifest_namespace or default_namespace
+
+
+def _should_skip(manifest: Dict) -> bool:
+    """Return True if drift.gitops.io/skip: 'true' is set on the manifest."""
+    val = (manifest.get("metadata", {}).get("annotations") or {}).get(SKIP_ANNOTATION, "")
+    return val.lower() == "true"
 
 
 def _manifest_for_remediation(
