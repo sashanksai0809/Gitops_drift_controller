@@ -6,7 +6,7 @@ from gitops_drift.reporter import print_report
 
 
 def test_print_report_json_includes_revision_envelope(capsys):
-    """JSON output must be a structured envelope so consumers can correlate results with a Git commit."""
+    """JSON output wraps resources in an envelope with a revision field."""
     entries = [
         {
             "kind": "Deployment",

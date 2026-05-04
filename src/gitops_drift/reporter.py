@@ -42,8 +42,6 @@ def build_report_entry(
 def print_report(entries: List[Dict], as_json: bool = False, revision: str = None) -> None:
     """Print the full drift report to stdout."""
     if as_json:
-        # Structured envelope so consumers can correlate results with the exact
-        # Git commit that was the source of truth for this run.
         report = {
             "revision": revision or "unknown",
             "resources": entries,

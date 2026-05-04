@@ -73,6 +73,7 @@ def _is_named_list(lst: list) -> bool:
     """Return True if every element is a dict with a 'name' key.
 
     Kubernetes uses named lists for containers, volumes, env vars, ports, and
-    init containers. Matching by name is semantically correct for all of them.
+    init containers. Positional matching would break when a webhook injects a
+    sidecar or an operator reorders entries.
     """
     return bool(lst) and all(isinstance(item, dict) and "name" in item for item in lst)

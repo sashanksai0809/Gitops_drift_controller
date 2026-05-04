@@ -78,7 +78,15 @@ Service `spec.clusterIP` is assigned by Kubernetes and immutable. Desired Servic
 
 ## 2. How does the exclusion mechanism work? What are its limits?
 
-### How it works
+There are two exclusion annotations with different scopes.
+
+### Resource-level skip
+
+`drift.gitops.io/skip: "true"` on a manifest causes the controller to skip that resource. No fetch, no diff, no report entry. The reconciler checks this before touching the API server.
+
+Use cases: a ConfigMap owned entirely by a third-party operator; a Deployment intentionally diverged during a canary rollout; a resource being migrated.
+
+### Field-level ignore
 
 The annotation `drift.gitops.io/ignore-fields` on a desired manifest accepts a comma-separated list of dot-notation paths:
 
@@ -205,27 +213,11 @@ drift-system/
 
 ## 6. Production Architecture: Polling vs. Informers
 
-The current implementation uses a polling loop: every `--interval` seconds, it fetches each tracked resource from the API server by name and compares it against the manifest. This is correct and simple for a scoped tool, but it does not scale to production workloads with hundreds of resources, and detection latency is bounded by the interval rather than the time it takes for a change to propagate through the watch stream.
+The current implementation polls: every `--interval` seconds it issues one `Get` per tracked resource and compares against the manifest. This is correct for a small, scoped manifest set. The tradeoff is that detection latency is bounded by the interval, not by the time a change propagates through the watch stream.
 
-A production controller uses the Kubernetes **informer** framework. An informer maintains a local in-memory cache backed by a `List` + `Watch` stream. The initial `List` populates the cache; the `Watch` stream delivers change events (Added, Modified, Deleted) in near real-time. Instead of issuing O(n) `Get` calls on every interval, the controller maintains a single persistent connection per resource type and receives events the moment a resource changes. Detection latency drops from up to `--interval` seconds to the round-trip time for a watch event (typically sub-second).
+At scale the right approach is informers: a `List` + `Watch` stream that delivers change events in near-real-time and backs a local cache, replacing O(n) `Get` calls per cycle with a single persistent connection per resource type. Informers pair naturally with a rate-limiting work queue, which also handles retry back-off and deduplication. Any remediation-capable controller running multiple replicas needs leader election on top of that to avoid concurrent conflicting replaces.
 
-Informers are coupled to a **work queue**. When a change event arrives, the resource key (`namespace/name`) is enqueued rather than processed inline. A pool of worker goroutines dequeues keys and runs the reconcile logic. This decoupling makes retries and error handling explicit: a `RateLimitingQueue` applies exponential backoff to repeatedly-failing reconciles, preventing a single broken resource from starving healthy ones. It also naturally deduplicates: if the same resource changes twice before a worker processes it, the key is in the queue once, and only the latest state is read when the worker runs.
-
-**Leader election** is required for any controller that remediates. In-cluster leader election uses a Kubernetes `Lease` object; the controller acquires the lease before processing and renews it periodically. Only the leader takes write actions; standby replicas watch the lease and are ready to take over within one lease period if the leader pod is terminated. Read-only (drift detection) replicas can run without leader election since concurrent reads are safe and at most produce duplicate log lines.
-
-**Rate limiting** matters when the watch stream delivers a burst of events (e.g. a rolling deployment that modifies pods rapidly). A token-bucket or sliding-window rate limiter on the work queue prevents the controller from overwhelming the API server with reconcile calls during high-churn periods.
-
-**Observability** in production requires structured metrics, not just logs. The controller would expose a Prometheus `/metrics` endpoint:
-
-| Metric | Type | Labels | Meaning |
-|---|---|---|---|
-| `drift_resources_total` | Gauge | `kind`, `namespace`, `status` | In-sync vs. drifted per cycle |
-| `drift_fields_total` | Gauge | `kind`, `namespace` | Total drifted fields per cycle |
-| `reconciliation_duration_seconds` | Histogram | (none) | Time per full reconciliation cycle |
-| `remediation_total` | Counter | `kind`, `namespace`, `result` | Success / failed remediation events |
-| `manifest_revision_info` | Gauge | `revision` | Git SHA of the currently-compared manifest |
-
-The `manifest_revision_info` metric is critical for alerting on a stale `git-sync` checkout: if the SHA does not change over a long window, the sidecar may be stuck.
+Polling is fine for this tool at its current scope. The threshold for switching is roughly: manifest count large enough that per-cycle `Get` calls become a meaningful API server load, or a use case requiring sub-interval detection latency.
 
 ---
 
