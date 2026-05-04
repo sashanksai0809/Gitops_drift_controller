@@ -78,7 +78,7 @@ Service `spec.clusterIP` is assigned by Kubernetes and immutable. Desired Servic
 
 ## 2. How does the exclusion mechanism work? What are its limits?
 
-There are two exclusion annotations with different scopes.
+There are two exclusion annotations and one global CLI flag.
 
 ### Resource-level skip
 
@@ -118,7 +118,9 @@ The current system does not make this distinction automatically. The mode is set
 
 **Alert-only drift** is drift where human judgment is required before acting. An image tag change might be an intentional hotfix or a security incident; both warrant review before the old image is restored. A label being added might be load-balancer or service-mesh traffic routing that was applied manually for a specific reason. A resource missing from the cluster may have been intentionally deleted to shed load during an incident. In all these cases, the right first response is to understand what happened, not to immediately re-apply the manifest.
 
-**Auto-remediable drift** is drift where convergence to Git state is always safe and has no external side effects. A ConfigMap field that was edited to `kubectl edit` and whose owning application tolerates a hot-reload is a candidate. Resource requests and limits that were bumped as a temporary measure are another. Even then, ConfigMap remediation is not automatically safe: workloads that do not hot-reload ConfigMaps require a pod restart before the new value takes effect, and updating a ConfigMap that controls feature flags or credentials is an application-visible change, not harmless metadata.
+The controller cannot tell the difference between these cases: an image change could be an on-call engineer's rollback or a compromised pipeline; a replica count change could be the HPA working normally or someone scaling down to shed load during an incident.
+
+**Auto-remediable drift** is drift where restoring Git state is always safe and has no external side effects. A ConfigMap field that was edited to `kubectl edit` and whose owning application tolerates a hot-reload is a candidate. Resource requests and limits that were bumped as a temporary measure are another. Even then, ConfigMap remediation is not automatically safe: workloads that do not hot-reload ConfigMaps require a pod restart before the new value takes effect, and updating a ConfigMap that controls feature flags or credentials is an application-visible change, not harmless metadata.
 
 **How the system decides in practice:** `--dry-run` is on by default. A human must explicitly pass `--remediate` for any write to reach the cluster. `--remediate` overrides `--dry-run` regardless of flag order.
 
@@ -134,7 +136,7 @@ When a resource is absent from the cluster entirely, the action is `would-create
 
 The operator reviews the dry-run report and decides whether to re-run with `--remediate`. When `--remediate` is active, every drifted resource is re-applied. This is an intentionally blunt instrument. A simple extension: add a per-resource annotation such as `drift.gitops.io/remediation-policy: auto|alert` and check it in `reconciler.py` before calling `remediator.remediate()`. Per-resource policy overrides the global flag without a CLI change.
 
-### How exclusions and remediation interact: a critical correctness detail
+### How exclusions and remediation interact
 
 The exclusion mechanism and the remediation path have a silent failure mode that is easy to miss. The naive implementation contains a silent data-loss bug: when a field is excluded from diff detection, it is removed from the comparison, but the remediation body is built from the original manifest, which still contains the manifest's declared value for that field. A full replace with that body sends the manifest's value to the API server, silently overwriting what an HPA or operator set.
 
@@ -165,7 +167,7 @@ The `normalizer.normalize()` function strips API-server-injected fields from bot
 - **Desired object**: The local YAML manifest does not contain these fields, but we still run it through `normalize()` for safety (e.g. if someone accidentally copies a `resourceVersion` into their manifest).
 - **Live object**: The API server always returns these fields. Stripping them ensures we only compare what was intentionally declared.
 
-The default system-managed fields are documented in `config.py` as `SYSTEM_MANAGED_FIELDS`. The implementation in `normalizer.py` also strips snake_case equivalents returned by the Kubernetes Python client's `to_dict()`: `metadata.resource_version`, `metadata.managed_fields`, `metadata.creation_timestamp`. The `kubectl.kubernetes.io/last-applied-configuration` annotation is stripped because it encodes the previous manifest as JSON and would show up as a change in every diff.
+The stripped paths are defined in `normalizer.py` as `_system_paths`, including snake_case equivalents returned by the Python client's `to_dict()`: `metadata.resource_version`, `metadata.managed_fields`, `metadata.creation_timestamp`. The `kubectl.kubernetes.io/last-applied-configuration` annotation is stripped because it encodes the previous manifest as JSON and would show up as a change in every diff.
 
 After normalization, the diff is purely value-based: two normalized objects are in sync if and only if every field declared in the desired object has the same value in the live object.
 
@@ -181,7 +183,7 @@ The controller runs as a single-replica Deployment in a dedicated namespace (`dr
 
 Desired-state manifests are mounted from a Git-synced volume (a sidecar running `git-sync` that pulls from the GitOps repository and writes to a shared `emptyDir`). A stale `git-sync` checkout is a meaningful failure mode: the controller may compare the cluster against an old commit and either miss real drift or remediate away a valid newer change. The commit SHA is logged on every reconciliation cycle and should be exported as a metric.
 
-The controller uses a ServiceAccount with a ClusterRole granting `get` on supported resources, plus `create` and `update` when remediation is enabled. The README includes a simple RBAC example that also grants `list`, which is useful if the design later grows inverse-drift detection.
+The controller uses a ServiceAccount with a ClusterRole granting `get` on supported resources, plus `create` and `update` when remediation is enabled. The README includes a simple RBAC example that also grants `list`, which is useful if the controller later adds inverse-drift detection.
 
 ```
 drift-system/
@@ -231,25 +233,7 @@ This creates a correctness problem for ignored fields. A replace body built from
 
 The conflict model under SSA: if the drift controller attempts to apply a field currently owned by another manager, Kubernetes returns HTTP 409 Conflict. The caller can either back off (treat this field as if it were in the ignore list) or force-take ownership by setting `force=True`. Forcing is appropriate only when the controller is deliberately taking control of a field from another manager; it should be a deliberate operator decision, not a default.
 
-This controller uses full replace for simplicity (see section 3 for the rationale and the live-value injection approach that makes it safe for the HPA case).
-
----
-
-## 8. Drift Classification: Alert vs. Auto-Remediate
-
-The controller does not classify drift. Every drifted resource is either reported or remediated based on the flag passed at runtime, regardless of what changed. This is a scope decision: the tool is not a policy engine.
-
-Most drift needs human judgment before acting. An image change could be an on-call engineer's rollback or a compromised pipeline. A replica count change could be the HPA working normally or someone scaling down to shed load during an incident. The controller cannot tell the difference.
-
-A straightforward extension: add a per-resource annotation:
-
-```yaml
-metadata:
-  annotations:
-    drift.gitops.io/remediation-policy: "alert"  # or "auto"
-```
-
-Check it in `reconciler.py` before calling `remediator.remediate()`. If the policy is `alert`, record the drift but skip the write regardless of `--remediate`. Per-resource annotations override the global flag for sensitive resources.
+This controller uses full replace for simplicity; the live-value injection described above makes it safe for the HPA case.
 
 ---
 
