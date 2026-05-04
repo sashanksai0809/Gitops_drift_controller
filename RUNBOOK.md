@@ -46,7 +46,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-Keeps everything out of your system Python. In a new terminal, just `source .venv/bin/activate` from the repo root and you're back in.
+Keeps dependencies isolated from your system Python. In a new terminal, run source .venv/bin/activate from the repo root.
 
 Sanity check:
 
